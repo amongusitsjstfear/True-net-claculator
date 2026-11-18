@@ -6,52 +6,148 @@
     <meta name="theme-color" content="#fcfbf9" />
     <meta name="description" content="Estimate cross-border invoice fees, currency conversion costs, tax reserves, and take-home income." />
     <title>True Net Calculator</title>
-
-    <!-- Styling and browser-side React/JSX support. -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>body{margin:0;background:#fcfbf9}button,input,select{font:inherit}</style>
   </head>
   <body>
-    <div id="root">
-      <main class="min-h-screen flex items-center justify-center bg-stone-50 p-6 font-sans text-slate-700">
-        <p role="status">Loading True Net Calculator…</p>
-      </main>
-    </div>
+    <div id="root"></div>
 
     <script type="text/babel">
-      // page.js remains the source component. This entry point adapts its Next.js
-      // client component for browser use without a build step.
-      (async function startCalculator() {
-        const root = document.getElementById('root');
-        try {
-          const response = await fetch('./page.js');
-          if (!response.ok) throw new Error(`Could not load page.js (${response.status})`);
-          let source = await response.text();
+      const { useState } = React;
 
-          // Remove the React module import and expose the UMD React hooks instead.
-          source = source.replace(
-            /import\s+React\s*,\s*\{([^}]+)\}\s*from\s*['"]react['"]\s*;?/,
-            'const { $1 } = React;'
-          );
-          // Next.js environment variables are unavailable on static hosting; the
-          // original component treats these optional integrations as disabled.
-          source = source.replace(/process\.env\.NEXT_PUBLIC_[A-Z0-9_]+\s*\|\|\s*''/g, "''");
-          source = source.replace(/export\s+default\s+function\s+/, 'function ');
+      const FX_RATES = {
+        USD: { USD: 1, EUR: 0.92, GBP: 0.79 },
+        EUR: { USD: 1.087, EUR: 1, GBP: 0.859 },
+        GBP: { USD: 1.266, EUR: 1.164, GBP: 1 },
+      };
+      const CURRENCIES = ['USD', 'EUR', 'GBP'];
+      const SYMBOLS = { USD: '$', EUR: '€', GBP: '£' };
+      const GATEWAYS = {
+        stripe: { name: 'Stripe', label: 'Stripe (2.9% + $0.30; cross-border + FX estimated)', baseRate: 0.029, fixedFeeUsd: 0.30, crossBorderRate: 0.015, intermediaryUsd: 0, fxRate: 0.01 },
+        paypal: { name: 'PayPal', label: 'PayPal (3.49% + $0.49; cross-border + FX estimated)', baseRate: 0.0349, fixedFeeUsd: 0.49, crossBorderRate: 0.015, intermediaryUsd: 0, fxRate: 0.035 },
+        wise: { name: 'Wise Business', label: 'Wise Business (~0.45%; mid-market FX)', baseRate: 0.0045, fixedFeeUsd: 0, crossBorderRate: 0, intermediaryUsd: 0, fxRate: 0 },
+        swift: { name: 'SWIFT Bank Wire', label: 'SWIFT Bank Wire ($45 + intermediary + FX estimate)', baseRate: 0, fixedFeeUsd: 45, crossBorderRate: 0, intermediaryUsd: 20, fxRate: 0.025 },
+      };
+      const MAX_GROSS = 1000000000;
+      const roundCents = (value) => {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return 0;
+        return Math.round((n + Number.EPSILON) * 100) / 100;
+      };
+      const money = (value, currency) => `${SYMBOLS[currency] || ''}${(Number.isFinite(value) ? value : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const percent = (rate) => `${(rate * 100).toFixed(2)}%`;
 
-          const compiled = Babel.transform(source, { presets: ['react'] }).code;
-          const runComponent = new Function(
-            'React',
-            'ReactDOM',
-            `${compiled}\nReactDOM.createRoot(document.getElementById('root')).render(React.createElement(TrueNetCalculatorApp));`
-          );
-          runComponent(React, ReactDOM);
-        } catch (error) {
-          console.error('True Net Calculator failed to start:', error);
-          root.innerHTML = '<main class="min-h-screen flex items-center justify-center bg-stone-50 p-6 font-sans"><div class="max-w-lg rounded-xl border border-red-200 bg-white p-6 text-slate-800 shadow"><h1 class="text-lg font-bold">Could not load the calculator</h1><p class="mt-2 text-sm">Make sure <code>page.js</code> is deployed alongside <code>index.html</code>, then reload this page.</p></div></main>';
-        }
-      })();
+      function calculate({ gross, gateway, invoiceCurrency, targetCurrency, taxRate }) {
+        const amount = Math.min(MAX_GROSS, Math.max(0, Number(gross) || 0));
+        const provider = GATEWAYS[gateway] || GATEWAYS.stripe;
+        const crossBorder = invoiceCurrency !== targetCurrency;
+        const baseFee = roundCents(amount * provider.baseRate);
+        const crossFee = crossBorder ? roundCents(amount * provider.crossBorderRate) : 0;
+        const fxFee = crossBorder ? roundCents(amount * provider.fxRate) : 0;
+        const fixedFee = amount > 0 ? roundCents(provider.fixedFeeUsd * (FX_RATES.USD[invoiceCurrency] || 1)) : 0;
+        const intermediary = crossBorder && amount > 0 ? roundCents(provider.intermediaryUsd * (FX_RATES.USD[invoiceCurrency] || 1)) : 0;
+        const totalFees = Math.min(amount, roundCents(baseFee + crossFee + fxFee + fixedFee + intermediary));
+        const afterFees = roundCents(amount - totalFees);
+        const rate = FX_RATES[invoiceCurrency]?.[targetCurrency] || 1;
+        const converted = roundCents(afterFees * rate);
+        const tax = Math.min(50, Math.max(0, Number(taxRate) || 0));
+        const taxReserve = roundCents(converted * tax / 100);
+        return { amount, provider, baseFee, crossFee, fxFee, fixedFee, intermediary, totalFees, afterFees, rate, converted, tax, taxReserve, net: roundCents(converted - taxReserve), crossBorder };
+      }
+
+      function TrueNetCalculatorApp() {
+        const [gross, setGross] = useState('12500');
+        const [invoiceCurrency, setInvoiceCurrency] = useState('USD');
+        const [targetCurrency, setTargetCurrency] = useState('EUR');
+        const [gateway, setGateway] = useState('stripe');
+        const [taxRate, setTaxRate] = useState(25);
+        const result = calculate({ gross, gateway, invoiceCurrency, targetCurrency, taxRate });
+        const inputClass = 'mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900';
+        const labelClass = 'block text-xs font-semibold uppercase tracking-wide text-slate-600';
+        const feeRows = [
+          ['Gross invoice', money(result.amount, invoiceCurrency)],
+          ['Base processing fee', `− ${money(result.baseFee, invoiceCurrency)} (${percent(result.provider.baseRate)})`],
+          ['Cross-border surcharge', `− ${money(result.crossFee, invoiceCurrency)}`],
+          ['FX fee / markup estimate', `− ${money(result.fxFee, invoiceCurrency)}`],
+          ['Fixed and intermediary fees', `− ${money(result.fixedFee + result.intermediary, invoiceCurrency)}`],
+          ['Total estimated fees', `− ${money(result.totalFees, invoiceCurrency)}`],
+          ['Converted payout', money(result.converted, targetCurrency)],
+          [`Tax reserve (${result.tax}%)`, `− ${money(result.taxReserve, targetCurrency)}`],
+        ];
+
+        return (
+          <main className="min-h-screen px-4 py-10 font-sans text-slate-900 sm:px-6">
+            <div className="mx-auto max-w-5xl">
+              <header className="mb-8">
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-700">Cross-border income estimator</p>
+                <h1 className="mt-2 text-3xl font-extrabold tracking-tight sm:text-4xl">True Net Calculator</h1>
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">Estimate processor fees, currency conversion costs, and a tax set-aside to see your approximate take-home payout.</p>
+              </header>
+
+              <section className="grid gap-6 lg:grid-cols-2">
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
+                  <h2 className="mb-5 text-lg font-bold">Invoice configuration</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <label className={labelClass} htmlFor="gross">Gross invoice amount</label>
+                      <div className="relative">
+                        <span className="pointer-events-none absolute left-3 top-3 text-slate-400">{SYMBOLS[invoiceCurrency]}</span>
+                        <input id="gross" className={`${inputClass} pl-7 font-mono`} type="number" min="0" max={MAX_GROSS} step="0.01" value={gross} onChange={(event) => setGross(event.target.value)} />
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass} htmlFor="invoice-currency">Client currency</label>
+                        <select id="invoice-currency" className={inputClass} value={invoiceCurrency} onChange={(event) => setInvoiceCurrency(event.target.value)}>{CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}</select>
+                      </div>
+                      <div>
+                        <label className={labelClass} htmlFor="target-currency">Payout target</label>
+                        <select id="target-currency" className={inputClass} value={targetCurrency} onChange={(event) => setTargetCurrency(event.target.value)}>{CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}</select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="gateway">Payment processor</label>
+                      <select id="gateway" className={inputClass} value={gateway} onChange={(event) => setGateway(event.target.value)}>{Object.entries(GATEWAYS).map(([key, provider]) => <option key={key} value={key}>{provider.label}</option>)}</select>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <label className={labelClass} htmlFor="tax">Estimated tax reserve</label>
+                        <span className="text-sm font-bold">{taxRate}%</span>
+                      </div>
+                      <input id="tax" className="mt-3 w-full accent-slate-900" type="range" min="0" max="50" step="1" value={taxRate} onChange={(event) => setTaxRate(Number(event.target.value))} />
+                      <div className="flex justify-between text-xs text-slate-500"><span>0%</span><span>50%</span></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
+                  <h2 className="mb-5 text-lg font-bold">Estimated net payout</h2>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-center">
+                    <p className="text-xs font-bold uppercase tracking-wide text-emerald-800">True net spendable income</p>
+                    <p className="mt-2 break-all font-mono text-4xl font-black tabular-nums text-emerald-950">{money(result.net, targetCurrency)}</p>
+                    <p className="mt-2 text-xs text-emerald-900">Approx. rate: 1 {invoiceCurrency} = {result.rate} {targetCurrency}</p>
+                  </div>
+                  <dl className="mt-5 divide-y divide-slate-100 text-sm">
+                    {feeRows.map(([name, value]) => (
+                      <div className="flex items-start justify-between gap-4 py-2.5" key={name}>
+                        <dt className="text-slate-600">{name}</dt>
+                        <dd className="text-right font-mono font-semibold tabular-nums">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Estimates only. Provider fees and exchange rates vary by account, country, card type, and date. Rates shown here are fixed approximations, not live market data. This is not financial, tax, or accounting advice.</p>
+                </div>
+              </section>
+              <footer className="mt-8 border-t border-slate-200 pt-4 text-xs leading-5 text-slate-500">Calculations run in your browser. Review each provider’s current pricing and consult a qualified professional before relying on an estimate.</footer>
+            </div>
+          </main>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<TrueNetCalculatorApp />);
     </script>
   </body>
 </html>
