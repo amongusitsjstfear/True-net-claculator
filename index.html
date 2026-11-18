@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#fcfbf9" />
+    <meta name="description" content="Estimate cross-border invoice fees, currency conversion costs, tax reserves, and take-home income." />
+    <title>True Net Calculator</title>
+
+    <!-- Styling and browser-side React/JSX support. -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body>
+    <div id="root">
+      <main class="min-h-screen flex items-center justify-center bg-stone-50 p-6 font-sans text-slate-700">
+        <p role="status">Loading True Net Calculator…</p>
+      </main>
+    </div>
+
+    <script type="text/babel">
+      // page.js remains the source component. This entry point adapts its Next.js
+      // client component for browser use without a build step.
+      (async function startCalculator() {
+        const root = document.getElementById('root');
+        try {
+          const response = await fetch('./page.js');
+          if (!response.ok) throw new Error(`Could not load page.js (${response.status})`);
+          let source = await response.text();
+
+          // Remove the React module import and expose the UMD React hooks instead.
+          source = source.replace(
+            /import\s+React\s*,\s*\{([^}]+)\}\s*from\s*['"]react['"]\s*;?/,
+            'const { $1 } = React;'
+          );
+          // Next.js environment variables are unavailable on static hosting; the
+          // original component treats these optional integrations as disabled.
+          source = source.replace(/process\.env\.NEXT_PUBLIC_[A-Z0-9_]+\s*\|\|\s*''/g, "''");
+          source = source.replace(/export\s+default\s+function\s+/, 'function ');
+
+          const compiled = Babel.transform(source, { presets: ['react'] }).code;
+          const runComponent = new Function(
+            'React',
+            'ReactDOM',
+            `${compiled}\nReactDOM.createRoot(document.getElementById('root')).render(React.createElement(TrueNetCalculatorApp));`
+          );
+          runComponent(React, ReactDOM);
+        } catch (error) {
+          console.error('True Net Calculator failed to start:', error);
+          root.innerHTML = '<main class="min-h-screen flex items-center justify-center bg-stone-50 p-6 font-sans"><div class="max-w-lg rounded-xl border border-red-200 bg-white p-6 text-slate-800 shadow"><h1 class="text-lg font-bold">Could not load the calculator</h1><p class="mt-2 text-sm">Make sure <code>page.js</code> is deployed alongside <code>index.html</code>, then reload this page.</p></div></main>';
+        }
+      })();
+    </script>
+  </body>
+</html>
