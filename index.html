@@ -1,153 +1,2010 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#fcfbf9" />
-    <meta name="description" content="Estimate cross-border invoice fees, currency conversion costs, tax reserves, and take-home income." />
-    <title>True Net Calculator</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <style>body{margin:0;background:#fcfbf9}button,input,select{font:inherit}</style>
-  </head>
-  <body>
-    <div id="root"></div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>True Net Calculator: Cross-Border Invoice Fee, FX and Tax Calculator</title>
 
-    <script type="text/babel">
-      const { useState } = React;
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
 
-      const FX_RATES = {
-        USD: { USD: 1, EUR: 0.92, GBP: 0.79 },
-        EUR: { USD: 1.087, EUR: 1, GBP: 0.859 },
-        GBP: { USD: 1.266, EUR: 1.164, GBP: 1 },
-      };
-      const CURRENCIES = ['USD', 'EUR', 'GBP'];
-      const SYMBOLS = { USD: '$', EUR: '€', GBP: '£' };
-      const GATEWAYS = {
-        stripe: { name: 'Stripe', label: 'Stripe (2.9% + $0.30; cross-border + FX estimated)', baseRate: 0.029, fixedFeeUsd: 0.30, crossBorderRate: 0.015, intermediaryUsd: 0, fxRate: 0.01 },
-        paypal: { name: 'PayPal', label: 'PayPal (3.49% + $0.49; cross-border + FX estimated)', baseRate: 0.0349, fixedFeeUsd: 0.49, crossBorderRate: 0.015, intermediaryUsd: 0, fxRate: 0.035 },
-        wise: { name: 'Wise Business', label: 'Wise Business (~0.45%; mid-market FX)', baseRate: 0.0045, fixedFeeUsd: 0, crossBorderRate: 0, intermediaryUsd: 0, fxRate: 0 },
-        swift: { name: 'SWIFT Bank Wire', label: 'SWIFT Bank Wire ($45 + intermediary + FX estimate)', baseRate: 0, fixedFeeUsd: 45, crossBorderRate: 0, intermediaryUsd: 20, fxRate: 0.025 },
-      };
-      const MAX_GROSS = 1000000000;
-      const roundCents = (value) => {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return 0;
-        return Math.round((n + Number.EPSILON) * 100) / 100;
-      };
-      const money = (value, currency) => `${SYMBOLS[currency] || ''}${(Number.isFinite(value) ? value : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-      const percent = (rate) => `${(rate * 100).toFixed(2)}%`;
+  <!-- React 18 & ReactDOM 18 UMD Production -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 
-      function calculate({ gross, gateway, invoiceCurrency, targetCurrency, taxRate }) {
-        const amount = Math.min(MAX_GROSS, Math.max(0, Number(gross) || 0));
-        const provider = GATEWAYS[gateway] || GATEWAYS.stripe;
-        const crossBorder = invoiceCurrency !== targetCurrency;
-        const baseFee = roundCents(amount * provider.baseRate);
-        const crossFee = crossBorder ? roundCents(amount * provider.crossBorderRate) : 0;
-        const fxFee = crossBorder ? roundCents(amount * provider.fxRate) : 0;
-        const fixedFee = amount > 0 ? roundCents(provider.fixedFeeUsd * (FX_RATES.USD[invoiceCurrency] || 1)) : 0;
-        const intermediary = crossBorder && amount > 0 ? roundCents(provider.intermediaryUsd * (FX_RATES.USD[invoiceCurrency] || 1)) : 0;
-        const totalFees = Math.min(amount, roundCents(baseFee + crossFee + fxFee + fixedFee + intermediary));
-        const afterFees = roundCents(amount - totalFees);
-        const rate = FX_RATES[invoiceCurrency]?.[targetCurrency] || 1;
-        const converted = roundCents(afterFees * rate);
-        const tax = Math.min(50, Math.max(0, Number(taxRate) || 0));
-        const taxReserve = roundCents(converted * tax / 100);
-        return { amount, provider, baseFee, crossFee, fxFee, fixedFee, intermediary, totalFees, afterFees, rate, converted, tax, taxReserve, net: roundCents(converted - taxReserve), crossBorder };
+  <!-- Babel Standalone for in-browser JSX parsing -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #fcfbf9;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ============================================================================
+    // CONFIGURATION: paste your Lemon Squeezy details here
+    // ============================================================================
+    const LEMONSQUEEZY_CHECKOUT_URL = "https://your-store.lemonsqueezy.com/buy/your-product-id";
+    const LEMONSQUEEZY_STORE_ID = "";
+    const LEMONSQUEEZY_PRODUCT_ID = "";
+    const LIFETIME_PASS_PRICE = "$49";
+    const SUPPORT_EMAIL = "devthinktoomuch@gmail.com";
+    const OPERATOR_NAME = "";
+    const REFUND_DAYS = 14;
+
+    // ============================================================================
+    // SHARED CONSTANTS, FEE MATH AND INPUT SANITIZERS
+    // ============================================================================
+    const FX_RATES = {
+      USD: { USD: 1.0, EUR: 0.92, GBP: 0.79 },
+      EUR: { USD: 1.087, EUR: 1.0, GBP: 0.859 },
+      GBP: { USD: 1.266, EUR: 1.164, GBP: 1.0 },
+    };
+    const CURRENCIES = ['USD', 'EUR', 'GBP'];
+    const SYMBOLS = { USD: '$', EUR: '€', GBP: '£' };
+
+    const GATEWAYS = {
+      stripe: {
+        id: 'stripe',
+        name: 'Stripe',
+        label: 'Stripe (2.9% + $0.30 Base / ~4.4%–5.4% Cross-Border & FX)',
+        baseRate: 0.029,
+        fixedFeeUsd: 0.3,
+        crossBorderRate: 0.015,
+        intermediaryUsd: 0,
+        fxRate: 0.01,
+      },
+      paypal: {
+        id: 'paypal',
+        name: 'PayPal',
+        label: "PayPal (3.49% + $0.49 Base / ~7.5%+ Int'l & FX Markup)",
+        baseRate: 0.0349,
+        fixedFeeUsd: 0.49,
+        crossBorderRate: 0.015,
+        intermediaryUsd: 0,
+        fxRate: 0.035,
+      },
+      wise: {
+        id: 'wise',
+        name: 'Wise Business',
+        label: 'Wise Business (~0.45%–0.6% + Mid-Market FX)',
+        baseRate: 0.0045,
+        fixedFeeUsd: 0,
+        crossBorderRate: 0,
+        intermediaryUsd: 0,
+        fxRate: 0,
+      },
+      swift: {
+        id: 'swift',
+        name: 'SWIFT Bank Wire',
+        label: 'SWIFT Bank Wire ($45 Flat + Intermediary & FX Spread)',
+        baseRate: 0,
+        fixedFeeUsd: 45,
+        crossBorderRate: 0,
+        intermediaryUsd: 20,
+        fxRate: 0.025,
+      },
+    };
+    const GATEWAY_KEYS = Object.keys(GATEWAYS);
+
+    const MAX_GROSS = 1_000_000_000;
+    const MAX_TAX = 50;
+    const WISE_AFFILIATE_URL = '';
+
+    const SITE_TITLE = 'True Net Calculator: Cross-Border Invoice Fee, FX and Tax Calculator';
+    const DEFAULTS = { gross: '12500', invoiceCurrency: 'USD', targetCurrency: 'EUR', gateway: 'stripe', tax: 25 };
+    const STORAGE_KEYS = {
+      gross: 'true_net_calculator_gross',
+      invoiceCurrency: 'true_net_calculator_inv_cur',
+      targetCurrency: 'true_net_calculator_tgt_cur',
+      gateway: 'true_net_calculator_gateway',
+      tax: 'true_net_calculator_tax',
+    };
+
+    const roundCents = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return 0;
+      const shifted = Number(`${Math.round(Number(`${n}e2`))}e-2`);
+      return Number.isFinite(shifted) ? shifted : Math.round(n * 100) / 100;
+    };
+
+    const toAmount = (raw) => {
+      const n = parseFloat(raw);
+      return Number.isFinite(n) ? roundCents(Math.min(Math.max(n, 0), MAX_GROSS)) : 0;
+    };
+    const toTaxRate = (raw) => {
+      const n = Number(raw);
+      return Number.isFinite(n) ? Math.min(MAX_TAX, Math.max(0, Math.round(n))) : DEFAULTS.tax;
+    };
+    const toCurrency = (raw, fallback) => (CURRENCIES.includes(raw) ? raw : fallback);
+    const toGateway = (raw) => (GATEWAY_KEYS.includes(raw) ? raw : DEFAULTS.gateway);
+
+    const cleanAmount = (v) => {
+      if (typeof v !== 'string' || v.includes('-')) return '';
+      const [whole = '', ...rest] = v.replace(/[^0-9.]/g, '').split('.');
+      return (rest.length ? `${whole}.${rest.join('').slice(0, 2)}` : whole).slice(0, 15);
+    };
+
+    const money = (val, code) =>
+      `${SYMBOLS[code] || ''}${(Number.isFinite(val) ? val : 0).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    const pct = (r) => `${(r * 100).toFixed(2)}%`;
+
+    const CONVERT_USD_FLAT_FEES = true;
+    const usdTo = (usd, currency) => (CONVERT_USD_FLAT_FEES ? roundCents(usd * (FX_RATES.USD[currency] ?? 1)) : usd);
+
+    const computeFees = (gross, gw, isCross, invoiceCurrency = 'USD') => {
+      const base = roundCents(gross * gw.baseRate);
+      const crossBorder = isCross ? roundCents(gross * gw.crossBorderRate) : 0;
+      const fx = isCross ? roundCents(gross * gw.fxRate) : 0;
+      const percentageFees = roundCents(roundCents(base + crossBorder) + fx);
+
+      const fixed = gross > 0 ? usdTo(gw.fixedFeeUsd, invoiceCurrency) : 0;
+      const intermediary = isCross && gross > 0 ? usdTo(gw.intermediaryUsd, invoiceCurrency) : 0;
+      const flatFees = roundCents(fixed + intermediary);
+
+      const raw = roundCents(percentageFees + flatFees);
+      const total = Math.min(gross, raw);
+      return { base, crossBorder, fx, percentageFees, fixed, intermediary, flatFees, total, afterFees: roundCents(gross - total), capped: raw > gross };
+    };
+
+    const calculatePayout = ({ gross, gateway, invoiceCurrency, targetCurrency, taxRate }) => {
+      const gw = GATEWAYS[toGateway(gateway)];
+      const amount = toAmount(gross);
+      const tax = toTaxRate(taxRate);
+      const isCross = invoiceCurrency !== targetCurrency;
+      const fees = computeFees(amount, gw, isCross, invoiceCurrency);
+      const crossRate = FX_RATES[invoiceCurrency]?.[targetCurrency] ?? 1.0;
+      const converted = roundCents(fees.afterFees * crossRate);
+      const taxReserve = roundCents(converted * (tax / 100));
+      const net = roundCents(converted - taxReserve);
+      const wiseTotal = computeFees(amount, GATEWAYS.wise, isCross, invoiceCurrency).total;
+      const leakage = roundCents(Math.max(0, roundCents(fees.total - wiseTotal)) * crossRate);
+      const effectiveRate = amount > 0 ? roundCents((fees.total / amount) * 100) : 0;
+      return { gw, amount, tax, isCross, fees, crossRate, converted, taxReserve, net, leakage, effectiveRate };
+    };
+
+    const seeded = (seed) => {
+      let a = seed >>> 0;
+      return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+    const simulateFxSeries = (from, to, days = 30) => {
+      const base = FX_RATES[from]?.[to] ?? 1;
+      if (from === to) return Array.from({ length: days }, () => 1);
+      const rand = seeded([...`${from}${to}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7));
+      let w = 1;
+      const walk = Array.from({ length: days }, () => (w *= 1 + (rand() - 0.5) * 0.012));
+      return walk.map((v) => (v / walk[days - 1]) * base);
+    };
+
+    // ============================================================================
+    // LEMON SQUEEZY LICENSE CLIENT
+    // ============================================================================
+    const LICENSE_CONFIG = {
+      priceLabel: LIFETIME_PASS_PRICE,
+      priceNote: 'One-time payment. Lifetime access.',
+    };
+
+    const API = 'https://api.lemonsqueezy.com/v1/licenses';
+    const REQUEST_TIMEOUT_MS = 10000;
+    const KEY_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
+    const LICENSE_STORAGE_KEY = 'true_net_calculator_license';
+
+    const fail = (message) => ({ ok: false, message });
+
+    const checkoutHref = () => {
+      try {
+        const url = new URL(LEMONSQUEEZY_CHECKOUT_URL);
+        const isPlaceholder = /your-store|your-product-id/i.test(url.href);
+        return url.protocol === 'https:' && url.hostname.endsWith('.lemonsqueezy.com') && !isPlaceholder ? url.href : '';
+      } catch {
+        return '';
       }
+    };
 
-      function TrueNetCalculatorApp() {
-        const [gross, setGross] = useState('12500');
-        const [invoiceCurrency, setInvoiceCurrency] = useState('USD');
-        const [targetCurrency, setTargetCurrency] = useState('EUR');
-        const [gateway, setGateway] = useState('stripe');
-        const [taxRate, setTaxRate] = useState(25);
-        const result = calculate({ gross, gateway, invoiceCurrency, targetCurrency, taxRate });
-        const inputClass = 'mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900';
-        const labelClass = 'block text-xs font-semibold uppercase tracking-wide text-slate-600';
-        const feeRows = [
-          ['Gross invoice', money(result.amount, invoiceCurrency)],
-          ['Base processing fee', `− ${money(result.baseFee, invoiceCurrency)} (${percent(result.provider.baseRate)})`],
-          ['Cross-border surcharge', `− ${money(result.crossFee, invoiceCurrency)}`],
-          ['FX fee / markup estimate', `− ${money(result.fxFee, invoiceCurrency)}`],
-          ['Fixed and intermediary fees', `− ${money(result.fixedFee + result.intermediary, invoiceCurrency)}`],
-          ['Total estimated fees', `− ${money(result.totalFees, invoiceCurrency)}`],
-          ['Converted payout', money(result.converted, targetCurrency)],
-          [`Tax reserve (${result.tax}%)`, `− ${money(result.taxReserve, targetCurrency)}`],
+    const normalizeKey = (raw) => (typeof raw === 'string' ? raw.trim() : '');
+    const isValidKeyFormat = (key) => KEY_PATTERN.test(key);
+
+    const post = async (path, fields) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${API}/${path}`, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams(fields).toString(),
+          signal: controller.signal,
+        });
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        return { ok: res.ok, data };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    const belongsToThisProduct = (meta) => {
+      if (String(LEMONSQUEEZY_STORE_ID).trim() && String(meta?.store_id) !== String(LEMONSQUEEZY_STORE_ID).trim()) return false;
+      if (String(LEMONSQUEEZY_PRODUCT_ID).trim() && String(meta?.product_id) !== String(LEMONSQUEEZY_PRODUCT_ID).trim()) return false;
+      return true;
+    };
+
+    const takeLicenseKeyFromUrl = (search) => {
+      const params = new URLSearchParams(search);
+      const raw = params.get('license_key');
+      if (raw === null) return { key: '', search };
+      params.delete('license_key');
+      const query = params.toString();
+      return { key: normalizeKey(raw), search: query ? `?${query}` : '' };
+    };
+
+    async function activateLicense(rawKey) {
+      const key = normalizeKey(rawKey);
+      if (!isValidKeyFormat(key)) return fail('That does not look like a license key. Copy it from your purchase email.');
+      try {
+        const { data } = await post('activate', { license_key: key, instance_name: 'TrueNetWeb' });
+        if (!data || data.activated !== true) {
+          return fail(typeof data?.error === 'string' && data.error ? data.error.slice(0, 200) : 'Invalid or expired license key.');
+        }
+        if (!belongsToThisProduct(data.meta)) {
+          if (data.instance?.id) {
+            try {
+              await post('deactivate', { license_key: key, instance_id: String(data.instance.id) });
+            } catch {
+              // Best effort: free the slot we just used
+            }
+          }
+          return fail('That license key belongs to a different store or product.');
+        }
+        const instanceId = String(data.instance?.id ?? '');
+        if (!KEY_PATTERN.test(instanceId)) return fail('The license server sent an unexpected response.');
+        return { ok: true, license: { key, instanceId } };
+      } catch {
+        return fail('Could not reach the license server. Check your connection and try again.');
+      }
+    }
+
+    async function validateLicense({ key, instanceId }) {
+      try {
+        const { data } = await post('validate', { license_key: key, instance_id: instanceId });
+        if (data && data.valid === true) return belongsToThisProduct(data.meta) ? 'valid' : 'invalid';
+        if (data && data.valid === false) return 'invalid';
+        return 'unknown';
+      } catch {
+        return 'unknown';
+      }
+    }
+
+    async function deactivateLicense({ key, instanceId }) {
+      try {
+        const { data } = await post('deactivate', { license_key: key, instance_id: instanceId });
+        return data?.deactivated === true;
+      } catch {
+        return false;
+      }
+    }
+
+    function loadStoredLicense() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(LICENSE_STORAGE_KEY) || 'null');
+        if (!parsed || typeof parsed !== 'object') return null;
+        const { key, instanceId } = parsed;
+        if (typeof key !== 'string' || typeof instanceId !== 'string') return null;
+        if (!KEY_PATTERN.test(key) || !KEY_PATTERN.test(instanceId)) return null;
+        return { key, instanceId };
+      } catch {
+        return null;
+      }
+    }
+
+    function saveStoredLicense(license) {
+      try {
+        localStorage.setItem(LICENSE_STORAGE_KEY, JSON.stringify({ key: license.key, instanceId: license.instanceId }));
+      } catch {
+        // Storage blocked: license lasts for this session only
+      }
+    }
+
+    function clearStoredLicense() {
+      try {
+        localStorage.removeItem(LICENSE_STORAGE_KEY);
+      } catch {
+        // Nothing to clear
+      }
+    }
+
+    // ============================================================================
+    // GOOGLE ADSENSE SLOTS
+    // ============================================================================
+    const CLIENT = '';
+    const SLOTS = {
+      top: '',
+      infeed: '',
+      footer: '',
+    };
+    const CLIENT_OK = /^ca-pub-\d{10,20}$/.test(CLIENT);
+    const SLOT_OK = (id) => /^\d{6,20}$/.test(id);
+
+    const ADS_CONFIGURED = CLIENT_OK && Object.values(SLOTS).some(SLOT_OK);
+
+    const CONSENT_KEY = 'true_net_calculator_ads_consent';
+    const CONSENT_EVENT = 'true-net-calculator-ads-consent';
+    const readConsent = () => {
+      try {
+        return localStorage.getItem(CONSENT_KEY);
+      } catch {
+        return null;
+      }
+    };
+
+    let scriptPromise = null;
+    function loadAdScript() {
+      if (scriptPromise) return scriptPromise;
+      scriptPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.async = true;
+        script.crossOrigin = 'anonymous';
+        script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(CLIENT)}`;
+        script.onload = () => resolve();
+        script.onerror = () => {
+          scriptPromise = null;
+          reject(new Error('ad script blocked'));
+        };
+        document.head.appendChild(script);
+      });
+      return scriptPromise;
+    }
+
+    function AdConsentBar({ hidden }) {
+      const [choice, setChoice] = useState('pending');
+      useEffect(() => {
+        setChoice(readConsent() || 'unset');
+      }, []);
+      if (hidden || !ADS_CONFIGURED || choice !== 'unset') return null;
+      const answer = (value) => {
+        try {
+          localStorage.setItem(CONSENT_KEY, value);
+        } catch {
+          // Storage blocked
+        }
+        setChoice(value);
+        window.dispatchEvent(new Event(CONSENT_EVENT));
+      };
+      return (
+        <div role="region" aria-label="Ad preferences" className="mx-auto mt-4 flex max-w-5xl flex-col gap-3 rounded-xl border border-slate-200 bg-white/90 px-4 py-3 text-xs text-slate-700 sm:flex-row sm:items-center sm:justify-between">
+          <p>The free plan shows a few Google ads, which may use cookies. Allow them? The Lifetime Pass removes ads. <a href="#privacy" className="underline underline-offset-2">Privacy Policy</a></p>
+          <div className="flex shrink-0 gap-2">
+            <button type="button" onClick={() => answer('granted')} className="rounded-lg bg-slate-900 px-3 py-1.5 font-semibold text-white hover:bg-slate-800">Allow ads</button>
+            <button type="button" onClick={() => answer('denied')} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">No thanks</button>
+          </div>
+        </div>
+      );
+    }
+
+    function AdBanner({ slot, hidden, className = '' }) {
+      const slotId = SLOTS[slot] || '';
+      const enabled = CLIENT_OK && SLOT_OK(slotId) && !hidden;
+      const [state, setState] = useState('off');
+      const insRef = useRef(null);
+
+      useEffect(() => {
+        if (!enabled) {
+          setState('off');
+          return undefined;
+        }
+        const sync = () => setState((s) => (readConsent() === 'granted' && s === 'off' ? 'ready' : s));
+        sync();
+        window.addEventListener(CONSENT_EVENT, sync);
+        return () => window.removeEventListener(CONSENT_EVENT, sync);
+      }, [enabled]);
+
+      useEffect(() => {
+        if (state !== 'ready') return undefined;
+        let cancelled = false;
+        loadAdScript()
+          .then(() => {
+            if (cancelled) return;
+            try {
+              (window.adsbygoogle = window.adsbygoogle || []).push({});
+              setState('live');
+            } catch {
+              setState('blocked');
+            }
+          })
+          .catch(() => {
+            if (!cancelled) setState('blocked');
+          });
+        return () => {
+          cancelled = true;
+        };
+      }, [state]);
+
+      useEffect(() => {
+        const el = insRef.current;
+        if (state !== 'live' || !el) return undefined;
+        const observer = new MutationObserver(() => {
+          if (el.getAttribute('data-ad-status') === 'unfilled') setState('blocked');
+        });
+        observer.observe(el, { attributes: true, attributeFilter: ['data-ad-status'] });
+        return () => observer.disconnect();
+      }, [state]);
+
+      if (!enabled || (state !== 'ready' && state !== 'live')) return null;
+      return (
+        <aside aria-label="Advertisement" className={`mx-auto w-full max-w-5xl px-4 sm:px-6 ${className}`}>
+          <p className="mb-1 text-center text-[10px] uppercase tracking-widest text-slate-400">Advertisement</p>
+          <ins
+            ref={insRef}
+            className="adsbygoogle block min-h-[90px] w-full overflow-hidden rounded-lg"
+            style={{ display: 'block' }}
+            data-ad-client={CLIENT}
+            data-ad-slot={slotId}
+            data-ad-format="auto"
+            data-full-width-responsive="true"
+          />
+        </aside>
+      );
+    }
+
+    // ============================================================================
+    // PREMIUM MODULES AND ACTIVATION SCREEN
+    // ============================================================================
+    const PROFILES_KEY = 'true_net_calculator_saved_clients';
+    const LEDGER_KEY = 'true_net_calculator_ledger';
+    const MAX_PROFILES = 20;
+    const MAX_LEDGER = 200;
+
+    const panel = 'rounded-2xl border border-slate-200 bg-white/80 shadow-sm';
+    const field =
+      'w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900';
+    const btnPrimary =
+      'rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+    const btnQuiet =
+      'rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900';
+
+    const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const cleanText = (s, max = 40) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
+    const today = () => new Date().toISOString().slice(0, 10);
+
+    const csvCell = (v) => {
+      let s = String(v ?? '');
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+
+    const sanitizeProfile = (p) => {
+      if (!p || typeof p !== 'object') return null;
+      const name = cleanText(p.name);
+      if (!name) return null;
+      return {
+        id: cleanText(p.id) || newId(),
+        name,
+        invoiceCurrency: toCurrency(p.invoiceCurrency, 'USD'),
+        targetCurrency: toCurrency(p.targetCurrency, 'EUR'),
+        gateway: toGateway(p.gateway),
+        tax: toTaxRate(p.tax),
+      };
+    };
+
+    const sanitizeEntry = (e) => {
+      if (!e || typeof e !== 'object') return null;
+      return {
+        id: cleanText(e.id) || newId(),
+        date: /^\d{4}-\d{2}-\d{2}$/.test(String(e.date)) ? e.date : today(),
+        label: cleanText(e.label),
+        gross: toAmount(e.gross),
+        invoiceCurrency: toCurrency(e.invoiceCurrency, 'USD'),
+        targetCurrency: toCurrency(e.targetCurrency, 'EUR'),
+        gateway: toGateway(e.gateway),
+        tax: toTaxRate(e.tax),
+      };
+    };
+
+    function useStoredList(key, sanitize, max) {
+      const [items, setItems] = useState([]);
+      const [ready, setReady] = useState(false);
+      useEffect(() => {
+        try {
+          const raw = JSON.parse(localStorage.getItem(key) || '[]');
+          if (Array.isArray(raw)) setItems(raw.map(sanitize).filter(Boolean).slice(0, max));
+        } catch {
+          // Corrupt data is ignored
+        }
+        setReady(true);
+      }, [key, sanitize, max]);
+      useEffect(() => {
+        if (!ready) return;
+        try {
+          localStorage.setItem(key, JSON.stringify(items));
+        } catch {
+          // Storage full or blocked
+        }
+      }, [items, ready, key]);
+      return [items, setItems];
+    }
+
+    const PREVIEW_CARDS = [
+      ['Saved Client Profiles', 'Save currencies, processor and tax rate per client and reload them in one tap.'],
+      ['Invoice Ledger and Accountant Report', 'Log invoices on this device and download a cent-accurate CSV for your accountant.'],
+      ['Provider Savings and Annual Projection', 'Compare Stripe, PayPal, Wise and SWIFT on your invoice and see what switching saves each year.'],
+      ['FX Trend Visualizer and Rate Alerts', 'See a 30-day simulated rate line and get alerts when it moves past your threshold.'],
+    ];
+
+    function PaywallCard({ busy, message, messageIsError, onActivate }) {
+      const [keyInput, setKeyInput] = useState('');
+      const href = checkoutHref();
+      return (
+        <div className="w-full max-w-md space-y-5 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-2xl sm:p-7">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">
+              <span aria-hidden="true">🔒 </span>Premium is locked
+            </p>
+            <h2 className="mt-1 text-xl font-extrabold">True Net Calculator Lifetime Pass</h2>
+            <p className="mt-2 text-3xl font-black tabular-nums">{LICENSE_CONFIG.priceLabel}</p>
+            <p className="text-sm text-slate-600">{LICENSE_CONFIG.priceNote}</p>
+          </div>
+          <ul className="space-y-1.5 text-left text-sm text-slate-700">
+            {['Saved client profiles', 'Invoice ledger and accountant report (CSV)', 'Provider savings and annual projection', 'FX trend visualizer with rate alerts'].map((t) => (
+              <li key={t} className="flex items-center gap-2">
+                <span aria-hidden="true" className="text-emerald-700">✓</span>
+                {t}
+              </li>
+            ))}
+          </ul>
+          <div>
+            {href ? (
+              <a href={href} target="_blank" rel="noopener noreferrer" className={`${btnPrimary} inline-block w-full`}>Claim Lifetime Pass</a>
+            ) : (
+              <button type="button" disabled className={`${btnPrimary} w-full`}>Claim Lifetime Pass</button>
+            )}
+            <p className="mt-2 text-xs text-slate-500">
+              {href
+                ? 'Secure checkout by Lemon Squeezy. VAT or sales tax is added at checkout where it applies.'
+                : 'Checkout is not connected yet. Paste your link into LEMONSQUEEZY_CHECKOUT_URL at the top of page.js.'}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              By purchasing you agree to the <a href="#terms" className="underline underline-offset-2">Terms &amp; Disclaimer</a> and <a href="#privacy" className="underline underline-offset-2">Privacy Policy</a>.
+            </p>
+          </div>
+          <form
+            className="border-t border-slate-200 pt-5 text-left"
+            onSubmit={(e) => {
+              e.preventDefault();
+              onActivate(keyInput);
+            }}
+          >
+            <label htmlFor="licenseKey" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Already purchased? Enter License Key</label>
+            <div className="flex flex-col gap-2 min-[420px]:flex-row">
+              <input
+                id="licenseKey"
+                className={`${field} font-mono`}
+                value={keyInput}
+                maxLength={64}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                onChange={(e) => setKeyInput(e.target.value)}
+              />
+              <button type="submit" className={btnPrimary} disabled={busy || !keyInput.trim()}>{busy ? 'Checking...' : 'Activate'}</button>
+            </div>
+          </form>
+          <p role="status" aria-live="polite" className={`min-h-[1.25rem] text-xs ${messageIsError ? 'font-semibold text-red-700' : 'text-emerald-800'}`}>{message}</p>
+        </div>
+      );
+    }
+
+    const entryCalc = (e) =>
+      calculatePayout({ gross: e.gross, gateway: e.gateway, invoiceCurrency: e.invoiceCurrency, targetCurrency: e.targetCurrency, taxRate: e.tax });
+
+    const buildLedgerCsv = (ledger) => {
+      const head = [
+        'Date', 'Client or note', 'Gross (client currency)', 'Client currency', 'Payout currency', 'Processor',
+        'Base fee (client currency)', 'Cross-border surcharge (client currency)', 'FX spread cost (client currency)',
+        'Fixed fees (client currency)', 'Total fees (client currency)', 'Converted payout (payout currency)',
+        'Tax set-aside %', 'Tax reserve (payout currency)', 'Net kept (payout currency)',
+      ];
+      const rows = ledger.map((e) => {
+        const c = entryCalc(e);
+        const f = c.fees;
+        return [
+          e.date, e.label, c.amount.toFixed(2), e.invoiceCurrency, e.targetCurrency, GATEWAYS[e.gateway].name,
+          f.base.toFixed(2), f.crossBorder.toFixed(2), f.fx.toFixed(2), f.flatFees.toFixed(2), f.total.toFixed(2),
+          c.converted.toFixed(2), c.tax, c.taxReserve.toFixed(2), c.net.toFixed(2),
         ];
+      });
+      return `\uFEFF${[head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`;
+    };
 
-        return (
-          <main className="min-h-screen px-4 py-10 font-sans text-slate-900 sm:px-6">
-            <div className="mx-auto max-w-5xl">
-              <header className="mb-8">
-                <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-700">Cross-border income estimator</p>
-                <h1 className="mt-2 text-3xl font-extrabold tracking-tight sm:text-4xl">True Net Calculator</h1>
-                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">Estimate processor fees, currency conversion costs, and a tax set-aside to see your approximate take-home payout.</p>
-              </header>
+    const INVOICES_KEY = 'true_net_calculator_invoices_per_year';
 
-              <section className="grid gap-6 lg:grid-cols-2">
-                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-                  <h2 className="mb-5 text-lg font-bold">Invoice configuration</h2>
-                  <div className="space-y-4">
-                    <div>
-                      <label className={labelClass} htmlFor="gross">Gross invoice amount</label>
-                      <div className="relative">
-                        <span className="pointer-events-none absolute left-3 top-3 text-slate-400">{SYMBOLS[invoiceCurrency]}</span>
-                        <input id="gross" className={`${inputClass} pl-7 font-mono`} type="number" min="0" max={MAX_GROSS} step="0.01" value={gross} onChange={(event) => setGross(event.target.value)} />
-                      </div>
-                    </div>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className={labelClass} htmlFor="invoice-currency">Client currency</label>
-                        <select id="invoice-currency" className={inputClass} value={invoiceCurrency} onChange={(event) => setInvoiceCurrency(event.target.value)}>{CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}</select>
-                      </div>
-                      <div>
-                        <label className={labelClass} htmlFor="target-currency">Payout target</label>
-                        <select id="target-currency" className={inputClass} value={targetCurrency} onChange={(event) => setTargetCurrency(event.target.value)}>{CURRENCIES.map((currency) => <option key={currency}>{currency}</option>)}</select>
-                      </div>
-                    </div>
-                    <div>
-                      <label className={labelClass} htmlFor="gateway">Payment processor</label>
-                      <select id="gateway" className={inputClass} value={gateway} onChange={(event) => setGateway(event.target.value)}>{Object.entries(GATEWAYS).map(([key, provider]) => <option key={key} value={key}>{provider.label}</option>)}</select>
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <label className={labelClass} htmlFor="tax">Estimated tax reserve</label>
-                        <span className="text-sm font-bold">{taxRate}%</span>
-                      </div>
-                      <input id="tax" className="mt-3 w-full accent-slate-900" type="range" min="0" max="50" step="1" value={taxRate} onChange={(event) => setTaxRate(Number(event.target.value))} />
-                      <div className="flex justify-between text-xs text-slate-500"><span>0%</span><span>50%</span></div>
-                    </div>
-                  </div>
-                </div>
+    function ProviderSavings({ snapshot }) {
+      const [perYear, setPerYear] = useState('12');
+      const [ready, setReady] = useState(false);
+      useEffect(() => {
+        try {
+          const n = Number(localStorage.getItem(INVOICES_KEY));
+          if (Number.isInteger(n) && n >= 1 && n <= 1000) setPerYear(String(n));
+        } catch {
+          // Default of 12 invoices a year is used
+        }
+        setReady(true);
+      }, []);
+      useEffect(() => {
+        if (!ready) return;
+        try {
+          localStorage.setItem(INVOICES_KEY, perYear);
+        } catch {
+          // Storage blocked
+        }
+      }, [perYear, ready]);
 
-                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-                  <h2 className="mb-5 text-lg font-bold">Estimated net payout</h2>
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-center">
-                    <p className="text-xs font-bold uppercase tracking-wide text-emerald-800">True net spendable income</p>
-                    <p className="mt-2 break-all font-mono text-4xl font-black tabular-nums text-emerald-950">{money(result.net, targetCurrency)}</p>
-                    <p className="mt-2 text-xs text-emerald-900">Approx. rate: 1 {invoiceCurrency} = {result.rate} {targetCurrency}</p>
-                  </div>
-                  <dl className="mt-5 divide-y divide-slate-100 text-sm">
-                    {feeRows.map(([name, value]) => (
-                      <div className="flex items-start justify-between gap-4 py-2.5" key={name}>
-                        <dt className="text-slate-600">{name}</dt>
-                        <dd className="text-right font-mono font-semibold tabular-nums">{value}</dd>
-                      </div>
+      const count = Math.min(1000, Math.max(1, Math.round(Number(perYear)) || 12));
+      const rows = GATEWAY_KEYS.map((key) => {
+        const c = calculatePayout({ gross: snapshot.gross, gateway: key, invoiceCurrency: snapshot.invoiceCurrency, targetCurrency: snapshot.targetCurrency, taxRate: snapshot.tax });
+        return { key, name: c.gw.name, fees: c.fees.total, net: c.net, yearNet: roundCents(c.net * count) };
+      });
+      const best = rows.reduce((a, b) => (b.net > a.net ? b : a));
+      const current = rows.find((r) => r.key === snapshot.gateway) || rows[0];
+      const yearlySaving = roundCents(best.yearNet - current.yearNet);
+      const hasInvoice = snapshot.gross > 0;
+
+      return (
+        <section aria-labelledby="savings-h" className={`${panel} p-5 lg:col-span-2`}>
+          <h2 id="savings-h" className="text-base font-bold">Provider Savings and Annual Projection</h2>
+          <p className="mb-4 text-xs text-slate-500">
+            Uses the calculator's current invoice ({money(snapshot.gross, snapshot.invoiceCurrency)}, {snapshot.invoiceCurrency} to {snapshot.targetCurrency}, {snapshot.tax}% tax set-aside) and the same fee math, rounded to the cent at every step.
+          </p>
+          <div className="mb-4 max-w-xs">
+            <label htmlFor="invoicesPerYear" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Invoices per year</label>
+            <input id="invoicesPerYear" className={field} type="number" inputMode="numeric" min="1" max="1000" step="1" value={perYear} onChange={(e) => setPerYear(e.target.value.slice(0, 4))} />
+          </div>
+          {!hasInvoice ? (
+            <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">Enter an invoice amount in the calculator to compare providers.</p>
+          ) : (
+            <>
+              <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                <table className="w-full min-w-[560px] text-left text-sm">
+                  <caption className="sr-only">Fees and yearly take-home by payment provider</caption>
+                  <thead className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase text-slate-500">
+                    <tr>
+                      {['Provider', 'Fees per invoice', 'You keep per invoice', 'You keep per year', 'Versus best per year'].map((h) => (
+                        <th key={h} scope="col" className="p-3">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {rows.map((r) => (
+                      <tr key={r.key} className={r.key === best.key ? 'bg-emerald-50' : ''}>
+                        <th scope="row" className="p-3 font-bold">{r.name}{r.key === snapshot.gateway ? ' (selected)' : ''}</th>
+                        <td className="p-3 font-mono tabular-nums">{money(r.fees, snapshot.invoiceCurrency)}</td>
+                        <td className="p-3 font-mono tabular-nums">{money(r.net, snapshot.targetCurrency)}</td>
+                        <td className="p-3 font-mono font-bold tabular-nums">{money(r.yearNet, snapshot.targetCurrency)}</td>
+                        <td className="p-3 font-mono tabular-nums">{r.key === best.key ? 'Best' : `-${money(roundCents(best.yearNet - r.yearNet), snapshot.targetCurrency)}`}</td>
+                      </tr>
                     ))}
-                  </dl>
-                  <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-900">Estimates only. Provider fees and exchange rates vary by account, country, card type, and date. Rates shown here are fixed approximations, not live market data. This is not financial, tax, or accounting advice.</p>
-                </div>
-              </section>
-              <footer className="mt-8 border-t border-slate-200 pt-4 text-xs leading-5 text-slate-500">Calculations run in your browser. Review each provider’s current pricing and consult a qualified professional before relying on an estimate.</footer>
+                  </tbody>
+                </table>
+              </div>
+              <p role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                {yearlySaving > 0
+                  ? `Switching from ${current.name} to ${best.name} would keep you about ${money(yearlySaving, snapshot.targetCurrency)} more per year at ${count} invoices of this size.`
+                  : `${current.name} is already the best option for an invoice of this size.`}
+              </p>
+            </>
+          )}
+        </section>
+      );
+    }
+
+    function PremiumModules({ licensed, snapshot, onLoadProfile, busy, message, messageIsError, onActivate }) {
+      const [profiles, setProfiles] = useStoredList(PROFILES_KEY, sanitizeProfile, MAX_PROFILES);
+      const [ledger, setLedger] = useStoredList(LEDGER_KEY, sanitizeEntry, MAX_LEDGER);
+      const [profileName, setProfileName] = useState('');
+      const [entryLabel, setEntryLabel] = useState('');
+      const [editingId, setEditingId] = useState(null);
+
+      const header = (
+        <div className="mx-auto mb-8 max-w-2xl text-center">
+          <h1 className="mb-2 text-2xl font-extrabold sm:text-3xl">Premium Modules</h1>
+          <p className="text-sm text-slate-600">Everything stays on this device. Nothing is uploaded.</p>
+        </div>
+      );
+
+      if (!licensed) {
+        return (
+          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6">
+            {header}
+            <div className="relative min-h-[700px]">
+              <div aria-hidden="true" className="pointer-events-none grid select-none grid-cols-1 gap-6 opacity-50 blur-[2px] md:grid-cols-2">
+                {PREVIEW_CARDS.map(([title, text]) => (
+                  <div key={title} className={`${panel} p-5`}>
+                    <h2 className="mb-1 text-base font-bold">{title}</h2>
+                    <p className="mb-4 text-xs text-slate-500">{text}</p>
+                    <div className="space-y-2">
+                      {[80, 64, 72].map((w) => (
+                        <div key={w} className="h-3 rounded bg-slate-200" style={{ width: `${w}%` }} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="absolute inset-0 flex items-start justify-center px-1 pt-4 sm:pt-10">
+                <PaywallCard busy={busy} message={message} messageIsError={messageIsError} onActivate={onActivate} />
+              </div>
             </div>
           </main>
         );
       }
 
-      ReactDOM.createRoot(document.getElementById('root')).render(<TrueNetCalculatorApp />);
-    </script>
-  </body>
+      const saveProfile = () => {
+        const name = cleanText(profileName);
+        if (!name) return;
+        const settings = {
+          invoiceCurrency: snapshot.invoiceCurrency,
+          targetCurrency: snapshot.targetCurrency,
+          gateway: snapshot.gateway,
+          tax: snapshot.tax,
+        };
+        if (editingId) {
+          setProfiles(profiles.map((p) => (p.id === editingId ? { ...p, name, ...settings } : p)));
+        } else if (profiles.length < MAX_PROFILES) {
+          setProfiles([...profiles, { id: newId(), name, ...settings }]);
+        }
+        setEditingId(null);
+        setProfileName('');
+      };
+
+      const addEntry = () => {
+        if (ledger.length >= MAX_LEDGER || snapshot.gross <= 0) return;
+        const entry = sanitizeEntry({
+          id: newId(),
+          date: today(),
+          label: entryLabel,
+          gross: snapshot.gross,
+          invoiceCurrency: snapshot.invoiceCurrency,
+          targetCurrency: snapshot.targetCurrency,
+          gateway: snapshot.gateway,
+          tax: snapshot.tax,
+        });
+        setLedger([entry, ...ledger]);
+        setEntryLabel('');
+      };
+
+      const exportCsv = () => {
+        const url = URL.createObjectURL(new Blob([buildLedgerCsv(ledger)], { type: 'text/csv;charset=utf-8' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'true-net-calculator-invoice-history.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      };
+
+      const totals = CURRENCIES.map((c) => [
+        c,
+        ledger.filter((e) => e.targetCurrency === c).reduce((sum, e) => roundCents(sum + entryCalc(e).net), 0),
+      ]).filter(([, v]) => v > 0);
+
+      return (
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6">
+          {header}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <section aria-labelledby="profiles-h" className={`${panel} p-5`}>
+              <h2 id="profiles-h" className="text-base font-bold">Saved Client Profiles</h2>
+              <p className="mb-4 text-xs text-slate-500">Saves the calculator's current currencies, processor and tax rate. Use Edit to rename a profile and replace its settings with the calculator's current ones.</p>
+              <div className="flex gap-2">
+                <label htmlFor="profileName" className="sr-only">Profile name</label>
+                <input id="profileName" className={field} value={profileName} maxLength={40} placeholder="e.g. Acme Corp EU" onChange={(e) => setProfileName(e.target.value)} />
+                <button type="button" className={btnPrimary} onClick={saveProfile} disabled={!cleanText(profileName) || (!editingId && profiles.length >= MAX_PROFILES)}>{editingId ? 'Update' : 'Save'}</button>
+                {editingId && (
+                  <button type="button" className={btnQuiet} onClick={() => { setEditingId(null); setProfileName(''); }}>Cancel</button>
+                )}
+              </div>
+              <ul className="mt-4 divide-y divide-slate-100">
+                {profiles.length === 0 && <li className="py-3 text-xs text-slate-500">No profiles yet.</li>}
+                {profiles.map((p) => (
+                  <li key={p.id} className="flex items-center justify-between gap-3 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{p.name}</p>
+                      <p className="text-xs text-slate-500">{p.invoiceCurrency} to {p.targetCurrency} · {GATEWAYS[p.gateway].name} · {p.tax}% tax</p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" className={btnQuiet} onClick={() => onLoadProfile(p)}>Load</button>
+                      <button type="button" className={btnQuiet} onClick={() => { setEditingId(p.id); setProfileName(p.name); }} aria-label={`Edit ${p.name}`}>Edit</button>
+                      <button type="button" className={btnQuiet} onClick={() => setProfiles(profiles.filter((x) => x.id !== p.id))} aria-label={`Delete ${p.name}`}>Delete</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            <section aria-labelledby="ledger-h" className={`${panel} p-5`}>
+              <h2 id="ledger-h" className="text-base font-bold">Invoice Ledger</h2>
+              <p className="mb-4 text-xs text-slate-500">Adds the calculator's current invoice to your private history. Every figure is recalculated with the same fee math.</p>
+              <div className="flex gap-2">
+                <label htmlFor="entryLabel" className="sr-only">Client or note</label>
+                <input id="entryLabel" className={field} value={entryLabel} maxLength={40} placeholder="Client or note (optional)" onChange={(e) => setEntryLabel(e.target.value)} />
+                <button type="button" className={btnPrimary} onClick={addEntry} disabled={snapshot.gross <= 0 || ledger.length >= MAX_LEDGER}>Add</button>
+              </div>
+              <ul className="mt-4 max-h-72 divide-y divide-slate-100 overflow-y-auto">
+                {ledger.length === 0 && <li className="py-3 text-xs text-slate-500">No entries yet.</li>}
+                {ledger.map((e) => (
+                  <li key={e.id} className="flex items-center justify-between gap-3 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{e.label || 'Invoice'}</p>
+                      <p className="text-xs text-slate-500">{e.date} · {money(e.gross, e.invoiceCurrency)} via {GATEWAYS[e.gateway].name}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-sm font-semibold tabular-nums">{money(entryCalc(e).net, e.targetCurrency)}</span>
+                      <button type="button" className={btnQuiet} onClick={() => setLedger(ledger.filter((x) => x.id !== e.id))} aria-label={`Delete ${e.label || 'entry'}`}>×</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                <p className="text-xs text-slate-600">
+                  {totals.length ? `Total kept: ${totals.map(([c, v]) => money(v, c)).join(' + ')}` : 'Total kept: none yet'}
+                </p>
+                <div className="flex gap-2">
+                  <button type="button" className={btnQuiet} onClick={exportCsv} disabled={ledger.length === 0}>Download Accountant Report</button>
+                  <button
+                    type="button"
+                    className={btnQuiet}
+                    disabled={ledger.length === 0}
+                    onClick={() => {
+                      if (window.confirm('Delete every ledger entry on this device?')) setLedger([]);
+                    }}
+                  >
+                    Clear all
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <ProviderSavings snapshot={snapshot} />
+            <FxTrend snapshot={snapshot} />
+          </div>
+        </main>
+      );
+    }
+
+    const ALERT_KEY = 'true_net_calculator_fx_alert';
+
+    function FxTrend({ snapshot }) {
+      const [from, setFrom] = useState(snapshot.invoiceCurrency);
+      const [to, setTo] = useState(snapshot.targetCurrency);
+      const [threshold, setThreshold] = useState('1');
+      const [ready, setReady] = useState(false);
+
+      useEffect(() => {
+        try {
+          const t = Number(localStorage.getItem(ALERT_KEY));
+          if (Number.isFinite(t) && t >= 0.1 && t <= 10) setThreshold(String(t));
+        } catch {
+          // Default threshold is used
+        }
+        setReady(true);
+      }, []);
+      useEffect(() => {
+        if (!ready) return;
+        try {
+          localStorage.setItem(ALERT_KEY, threshold);
+        } catch {
+          // Storage blocked
+        }
+      }, [threshold, ready]);
+
+      const limit = Math.min(10, Math.max(0.1, Number(threshold) || 1));
+      const series = simulateFxSeries(from, to);
+      const latest = series[series.length - 1];
+      const avg = series.reduce((s, v) => s + v, 0) / series.length;
+      const lo = Math.min(...series);
+      const hi = Math.max(...series);
+      const dev = avg > 0 ? ((latest - avg) / avg) * 100 : 0;
+      const afterFees = calculatePayout({ gross: snapshot.gross, gateway: snapshot.gateway, invoiceCurrency: from, targetCurrency: to, taxRate: snapshot.tax }).fees.afterFees;
+      const impact = roundCents(Math.abs(afterFees * (latest - avg)));
+      const W = 600;
+      const H = 200;
+      const P = 16;
+      const span = hi - lo || 1;
+      const y = (v) => H - P - ((v - lo) / span) * (H - 2 * P);
+      const pts = series.map((v, i) => `${(P + (i / (series.length - 1)) * (W - 2 * P)).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+      const same = from === to;
+
+      return (
+        <section aria-labelledby="fx-h" className={`${panel} p-5 lg:col-span-2`}>
+          <h2 id="fx-h" className="text-base font-bold">FX Trend Visualizer and Rate Alerts</h2>
+          <p className="mb-4 text-xs text-slate-500">Simulated 30-day illustration. True Net Calculator uses fixed approximate rates and does not pull live market data, so treat alerts as a planning aid only.</p>
+          <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-3">
+            <div className="min-w-0">
+              <label htmlFor="fxFrom" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">From</label>
+              <select id="fxFrom" className={field} value={from} onChange={(e) => setFrom(toCurrency(e.target.value, 'USD'))}>
+                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="min-w-0">
+              <label htmlFor="fxTo" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">To</label>
+              <select id="fxTo" className={field} value={to} onChange={(e) => setTo(toCurrency(e.target.value, 'EUR'))}>
+                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="min-w-0">
+              <label htmlFor="fxLimit" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Alert threshold (%)</label>
+              <input id="fxLimit" className={field} type="number" inputMode="decimal" min="0.1" max="10" step="0.1" value={threshold} onChange={(e) => setThreshold(e.target.value.slice(0, 5))} />
+            </div>
+          </div>
+          {same ? (
+            <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">Pick two different currencies to see a trend.</p>
+          ) : (
+            <>
+              <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Simulated 30-day ${from} to ${to} rate. Today ${latest.toFixed(4)}, average ${avg.toFixed(4)}, low ${lo.toFixed(4)}, high ${hi.toFixed(4)}.`} className="mt-4 h-48 w-full rounded-lg border border-slate-200 bg-white">
+                <line x1={P} x2={W - P} y1={y(avg)} y2={y(avg)} stroke="#94a3b8" strokeDasharray="5 5" />
+                <polyline points={pts} fill="none" stroke="#0f172a" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+                <circle cx={W - P} cy={y(latest)} r="5" fill="#047857" />
+                <text x={P} y={H - 2} fontSize="11" fill="#64748b">30 days ago</text>
+                <text x={W - P} y={H - 2} fontSize="11" fill="#64748b" textAnchor="end">Today</text>
+              </svg>
+              <dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                {[['Today', latest], ['30-day average', avg], ['Low', lo], ['High', hi]].map(([k, v]) => (
+                  <div key={k} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <dt className="text-[10px] uppercase text-slate-400">{k}</dt>
+                    <dd className="font-mono text-sm font-bold text-slate-900">{v.toFixed(4)}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p role="status" className={`mt-3 rounded-lg border p-3 text-xs ${Math.abs(dev) >= limit ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                {dev >= limit && `Rate alert: today's simulated rate is ${dev.toFixed(2)}% above its 30-day average. On your current ${money(snapshot.gross, from)} invoice, after fees, that is about ${money(impact, to)} more than the average rate would give.`}
+                {dev <= -limit && `Rate alert: today's simulated rate is ${Math.abs(dev).toFixed(2)}% below its 30-day average, about ${money(impact, to)} less on your current ${money(snapshot.gross, from)} invoice after fees. Consider waiting or locking a rate with your provider.`}
+                {Math.abs(dev) < limit && `No alert: today's simulated rate is ${dev.toFixed(2)}% from its 30-day average, inside your ${limit}% threshold.`}
+              </p>
+            </>
+          )}
+        </section>
+      );
+    }
+
+    function ActivationView({ license, busy, message, messageIsError, onActivate, onDeactivate, onOpenPremium }) {
+      return (
+        <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-4 py-12 sm:px-6">
+          {license ? (
+            <div className={`${panel} w-full space-y-4 p-6 text-center shadow-xl sm:p-8`}>
+              <p className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-4 py-2 text-sm font-bold text-emerald-900">
+                <span aria-hidden="true">✓</span> Lifetime Pass active
+              </p>
+              <p className="text-sm text-slate-600">
+                License key ending in <span className="font-mono font-bold">{license.key.slice(-4)}</span> is active in this browser.
+              </p>
+              <div className="flex flex-col justify-center gap-3 min-[420px]:flex-row">
+                <button type="button" className={btnPrimary} onClick={onOpenPremium}>Open premium modules</button>
+                <button type="button" className={btnQuiet} onClick={onDeactivate} disabled={busy}>
+                  {busy ? 'Working...' : 'Remove license from this browser'}
+                </button>
+              </div>
+              <p role="status" aria-live="polite" className={`min-h-[1.25rem] text-xs ${messageIsError ? 'font-semibold text-red-700' : 'text-slate-600'}`}>{message}</p>
+            </div>
+          ) : (
+            <PaywallCard busy={busy} message={message} messageIsError={messageIsError} onActivate={onActivate} />
+          )}
+        </main>
+      );
+    }
+
+    // ============================================================================
+    // LEGAL TEXT AND MODALS (Privacy Policy, Terms & Disclaimer, About & Contact)
+    // ============================================================================
+    const LEGAL_UPDATED = "November 18, 2026";
+    const LEGAL_LINK = "text-slate-900 underline underline-offset-2 hover:text-emerald-800";
+
+    const LOCAL_KEY_NOTES = [
+      "true_net_calculator_gross: the invoice amount you typed",
+      "true_net_calculator_inv_cur: your client's currency",
+      "true_net_calculator_tgt_cur: your payout currency",
+      "true_net_calculator_gateway: the payment processor you picked",
+      "true_net_calculator_tax: your tax set-aside percentage",
+      "true_net_calculator_license: your license key and device ID, after you activate Premium",
+      "true_net_calculator_saved_clients: your saved client profiles (Premium)",
+      "true_net_calculator_ledger: your invoice ledger (Premium)",
+      "true_net_calculator_invoices_per_year: your annual projection setting (Premium)",
+      "true_net_calculator_fx_alert: your FX alert threshold (Premium)",
+      "true_net_calculator_ads_consent: whether you allowed or declined ads",
+    ];
+
+    const LEGAL_DOCS = {
+      privacy: {
+        title: "Privacy Policy",
+        sections: [
+          ["Summary", [
+            "True Net Calculator estimates what you keep from an international invoice. The numbers you type are processed locally in your browser and saved in your browser's localStorage. There are no accounts, and your invoice figures are not sent to our servers.",
+            { list: [
+              "Calculations run on your device.",
+              "Lemon Squeezy handles secure checkout and license key validation.",
+              "On the free plan, Google ads load only if you click Allow ads.",
+              "We do not sell your personal information.",
+            ] },
+          ]],
+          ["Information stored on your device (localStorage)", [
+            "To remember your settings, this site saves the following items in your browser's localStorage. They stay on your device and are not sent to us.",
+            { list: LOCAL_KEY_NOTES },
+            "Clearing this site's data in your browser deletes these items, and we cannot recover them.",
+          ]],
+          ["Purchases and license keys (Lemon Squeezy)", [
+            "Lemon Squeezy is our merchant of record. It handles checkout, payment, taxes and receipts. We never see your card details. In our Lemon Squeezy account we can see order details such as your email address, which we use to help you with support.",
+            "When you activate a license key, your browser sends the key and a device label (TrueNetWeb) to Lemon Squeezy's license service to confirm that it is valid. The key and a device ID are then saved in your localStorage, and the key is checked again on later visits. Lemon Squeezy's own privacy policy covers its processing.",
+            { links: [["Lemon Squeezy Privacy Policy", "https://www.lemonsqueezy.com/privacy"]] },
+          ]],
+          ["Advertising (Google AdSense) and affiliate links", [
+            "The free plan may show ads from Google AdSense. The ad script loads only after you click Allow ads in the ad notice. Google and its partners may then use cookies or similar identifiers to show and measure ads, including personalized ads. Your choice is saved in localStorage. If you click No thanks, no ad script loads. The Lifetime Pass removes ads.",
+            { links: [
+              ["How Google uses information from sites that use its services", "https://policies.google.com/technologies/partner-sites"],
+              ["Google Ads Settings", "https://adssettings.google.com"],
+            ] },
+            "Some links, such as those to Wise, are affiliate links and are marked as sponsored. If you click one, the provider or its affiliate network may set cookies and tell us that a click or sign-up happened, and we may earn a commission at no extra cost to you.",
+          ]],
+          ["Server logs and cookies", [
+            "Our hosting provider processes technical data such as your IP address, browser type and request times to deliver and secure the site. We run no analytics and no tracking pixels, and this site sets no cookies of its own. Third parties named above, such as Lemon Squeezy at checkout, Google if you allow ads, or Wise if you click an affiliate link, may set their own cookies.",
+          ]],
+          ["Legal bases (EEA and UK)", [
+            "Where data protection law such as the GDPR applies, we rely on: performance of a contract (verifying your license), legitimate interests (delivering and securing the site), and consent (advertising cookies).",
+          ]],
+          ["Sharing and international transfers", [
+            "We do not sell personal information. Data is processed by Lemon Squeezy, by Google if you allow ads, and by our hosting provider. These providers may process data outside your country under the safeguards they describe in their own policies.",
+          ]],
+          ["Retention", [
+            "Data in your localStorage stays until you clear it. Purchase records are kept by Lemon Squeezy and by us for as long as needed for support, accounting and tax. Server logs are kept by the hosting provider under its own schedule.",
+          ]],
+          ["Your rights", [
+            "Depending on where you live, you may have the right to access, correct, delete, restrict or object to the processing of your personal data, to withdraw consent, to data portability, and to complain to your data protection authority. California residents have the right to know, delete and opt out of the sale or sharing of personal information. To use these rights for purchase records, email us from your purchase address. To stop ads, click No thanks or use Google Ads Settings. For everything stored in localStorage, you can delete it yourself in your browser.",
+          ]],
+          ["Children", [
+            "True Net Calculator is not directed at children under 16, and we do not knowingly collect their personal data.",
+          ]],
+          ["Security", [
+            "The site is served over HTTPS. Data in localStorage is not encrypted, so anyone with access to your browser profile can read it, including your license key. Avoid using shared computers.",
+          ]],
+          ["Changes", [
+            `We may update this policy. The date above shows the latest version.`,
+          ]],
+          ["Contact", [
+            "Questions about privacy? Email us:",
+            { email: true },
+          ]],
+        ],
+      },
+
+      terms: {
+        title: "Terms & Disclaimer",
+        sections: [
+          ["Estimates only, not financial advice", [
+            "True Net Calculator provides estimates for general information only. It is not financial, tax, legal, accounting or investment advice, and it does not create an advisory relationship.",
+            { list: [
+              "Fees for Stripe, PayPal, Wise and SWIFT are modelled estimates and may differ from what your account is actually charged.",
+              "Exchange rates are fixed approximate rates, not live market rates.",
+              "The 30-day FX trend is a simulated illustration, not market data.",
+              "The tax set-aside is a percentage you choose. It is not a tax calculation.",
+            ] },
+            "Real fees vary by account, country, card type and amount, and they change over time. Check each provider's current pricing and speak to a qualified professional before you rely on any figure. You are responsible for your own decisions.",
+          ]],
+          ["No warranty", [
+            "The site and its results are provided “as is” and “as available”, without warranties of any kind, to the extent the law allows.",
+          ]],
+          ["Using the site", [
+            "By using True Net Calculator you agree to these terms. You must be at least 18, or have the legal capacity to enter a contract, to make a purchase. Do not misuse the site, overload it, or try to bypass the license check.",
+          ]],
+          ["Free plan and Lifetime Pass", [
+            "The calculator is free. The Lifetime Pass is a one-time payment that unlocks the Premium modules: saved client profiles, the invoice ledger and CSV report, the provider savings and annual projection tool, and the FX trend visualizer. “Lifetime” means for as long as True Net Calculator is offered, not for your lifetime. We may improve, change or retire features, and we will try to give notice of major changes.",
+          ]],
+          ["License keys", [
+            "A license key is for the person or business that bought it. Each key can be activated on a limited number of devices. Do not share or resell keys. We may deactivate keys that are refunded, charged back or abused. The site re-checks your key with Lemon Squeezy when you visit.",
+          ]],
+          ["Payments, taxes and refunds", [
+            "Lemon Squeezy is the merchant of record and handles secure checkout, payment, receipts and applicable VAT or sales tax. Its terms apply to the transaction.",
+            `Refund policy: if you are not satisfied, email us within ${REFUND_DAYS} days of purchase with your purchase email or order number and we will refund the Lifetime Pass. A refunded key is deactivated. Any statutory consumer rights you have are not affected.`,
+            { email: true },
+          ]],
+          ["Your data and backups", [
+            "Your profiles, ledger and settings live only in your browser's localStorage. Clearing browser data, or switching to another browser or device, removes them, and we cannot restore them. Use the CSV report to keep your own copy.",
+          ]],
+          ["Ads and affiliate disclosure", [
+            "The free plan may show ads. Some links, such as those to Wise, are affiliate links, are marked as sponsored, and may earn us a commission at no extra cost to you. Provider comparisons use modelled estimates and are not an endorsement.",
+          ]],
+          ["Intellectual property", [
+            "The site's code, design and text belong to us or our licensors. Your purchase gives you a personal, non-transferable right to use the Premium features.",
+          ]],
+          ["Limitation of liability", [
+            "To the fullest extent the law allows, we are not liable for indirect or consequential loss, lost profits, or losses from decisions made using the estimates, and our total liability for any claim is limited to the amount you paid us in the 12 months before the claim. Nothing here limits liability that cannot be limited by law.",
+          ]],
+          ["Changes", [
+            "We may update these terms. Continued use after an update means you accept the new version. The date above shows the latest version.",
+          ]],
+          ["Contact", [
+            "Questions about these terms? Email us:",
+            { email: true },
+          ]],
+        ],
+      },
+
+      contact: {
+        title: "About & Contact",
+        sections: [
+          ["About", [
+            "True Net Calculator is an independent tool for freelancers and small businesses that invoice across currencies. It estimates payment processor fees, currency conversion costs and a tax set-aside so you can see what you actually keep. It runs in your browser.",
+            ...(OPERATOR_NAME ? [`Operated by ${OPERATOR_NAME}.`] : []),
+          ]],
+          ["Support", [
+            "For support, license key help, refund requests or privacy questions, email us:",
+            { email: true },
+            "Please include the email address you used to buy, and your order number if you have it. Never send full card numbers.",
+          ]],
+        ],
+      },
+    };
+
+    const legalKeyFromHash = (hash) => {
+      const key = String(hash || "").replace(/^#/, "");
+      return Object.prototype.hasOwnProperty.call(LEGAL_DOCS, key) ? key : null;
+    };
+
+    function LegalBlock({ block }) {
+      if (typeof block === "string") return <p>{block}</p>;
+      if (block.list) {
+        return (
+          <ul className="list-disc space-y-1 pl-5">
+            {block.list.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        );
+      }
+      if (block.links) {
+        return (
+          <ul className="list-disc space-y-1 pl-5">
+            {block.links.map(([label, href]) => (
+              <li key={href}>
+                <a href={href} target="_blank" rel="noopener noreferrer" className={LEGAL_LINK}>{label}</a>
+              </li>
+            ))}
+          </ul>
+        );
+      }
+      if (block.email) {
+        return (
+          <p>
+            <a href={`mailto:${SUPPORT_EMAIL}`} className={LEGAL_LINK}>{SUPPORT_EMAIL}</a>
+          </p>
+        );
+      }
+      return null;
+    }
+
+    function LegalModal({ docKey, onClose }) {
+      const doc = LEGAL_DOCS[docKey];
+      const dialogRef = useRef(null);
+      const closeBtnRef = useRef(null);
+      const onCloseRef = useRef(onClose);
+      onCloseRef.current = onClose;
+
+      useEffect(() => {
+        const previous = document.activeElement;
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        if (closeBtnRef.current) closeBtnRef.current.focus();
+        const onKey = (e) => {
+          if (e.key === 'Escape') {
+            onCloseRef.current();
+            return;
+          }
+          if (e.key !== 'Tab' || !dialogRef.current) return;
+          const items = dialogRef.current.querySelectorAll('a[href], button:not([disabled])');
+          if (!items.length) return;
+          const first = items[0];
+          const last = items[items.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        };
+        document.addEventListener('keydown', onKey);
+        return () => {
+          document.removeEventListener('keydown', onKey);
+          document.body.style.overflow = previousOverflow;
+          if (previous && typeof previous.focus === 'function') previous.focus();
+        };
+      }, [docKey]);
+
+      if (!doc) return null;
+      return (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-900/50 sm:items-center sm:p-6"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
+        >
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="legal-title"
+            className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-t-2xl bg-white shadow-2xl sm:max-h-[85vh] sm:rounded-2xl"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 id="legal-title" className="text-lg font-extrabold">{doc.title}</h2>
+                <p className="text-xs text-slate-500">True Net Calculator · Last updated {LEGAL_UPDATED}</p>
+              </div>
+              <button
+                ref={closeBtnRef}
+                type="button"
+                onClick={onClose}
+                aria-label={`Close ${doc.title}`}
+                className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900"
+              >
+                Close
+              </button>
+            </div>
+            <div className="overflow-y-auto px-5 pb-6 pt-1 text-sm leading-relaxed text-slate-700">
+              {doc.sections.map(([heading, blocks]) => (
+                <section key={heading}>
+                  <h3 className="mb-1 mt-5 text-base font-bold text-slate-900">{heading}</h3>
+                  <div className="space-y-2">
+                    {blocks.map((block, i) => <LegalBlock key={i} block={block} />)}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================================
+    // MAIN PAGE
+    // ============================================================================
+    const baseLabel = (gw) =>
+      [gw.baseRate > 0 && pct(gw.baseRate), gw.fixedFeeUsd > 0 && money(gw.fixedFeeUsd, 'USD')].filter(Boolean).join(' + ') || 'None';
+    const crossLabel = (gw) =>
+      [gw.crossBorderRate > 0 && pct(gw.crossBorderRate), gw.intermediaryUsd > 0 && `~${money(gw.intermediaryUsd, 'USD')}`].filter(Boolean).join(' + ') || 'None';
+    const fxLabel = (gw) => (gw.fxRate > 0 ? `~${pct(gw.fxRate)}` : 'None (mid-market)');
+    const CORRIDOR = GATEWAY_KEYS.map((k) => ({ gw: GATEWAYS[k], ...computeFees(10000, GATEWAYS[k], true) }));
+    const WISE_CORRIDOR_FEE = CORRIDOR.find((r) => r.gw.id === 'wise').total;
+    const WORST_CORRIDOR_LEAK = Math.max(...CORRIDOR.map((r) => r.total)) - WISE_CORRIDOR_FEE;
+
+    function PassCta({ licensed, href, onOpen, className }) {
+      if (!licensed && href) {
+        return (
+          <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+            Lifetime Pass
+          </a>
+        );
+      }
+      return (
+        <button type="button" onClick={onOpen} className={className}>
+          {licensed ? 'Premium' : 'Lifetime Pass'}
+        </button>
+      );
+    }
+
+    const TABS = [
+      ['v1', 'Calculator'],
+      ['v2', 'Corridor Analytics'],
+      ['v3', 'Premium'],
+      ['v4', 'Activation'],
+      ['v5', 'Workspace'],
+    ];
+
+    const card = 'rounded-2xl border border-slate-200 bg-white/80 shadow-sm';
+    const lab = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500';
+    const ctl =
+      'w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900';
+    const btnDark =
+      'rounded-xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-md transition-colors hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2';
+
+    const DOT = { fill: 'none', stroke: '#8b2626', strokeWidth: 2.4, strokeLinecap: 'round', strokeDasharray: '0.1 4.6' };
+
+    const Glyph = ({ x, y }) => (
+      <g>
+        <circle cx={x} cy={y} r="5" />
+        <circle cx={x} cy={y} r="1.6" />
+        <path d={`M${x - 4},${y + 8} q4,-4 8,0`} />
+      </g>
+    );
+
+    const STAIR = [0, 1, 2, 3, 4].flatMap((i) => Array.from({ length: 5 - i }, (_, j) => ({ x: 8 + j * 27, y: 118 - i * 27 })));
+
+    function GeoBackground() {
+      const orn = (id, box, cls) => (
+        <svg viewBox={box} className={`absolute ${cls}`}>
+          <use href={`#${id}`} />
+        </svg>
+      );
+      return (
+        <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 overflow-hidden opacity-50">
+          <svg width="0" height="0" className="absolute">
+            <defs>
+              <symbol id="tn-spire" viewBox="0 0 60 160">
+                <g {...DOT}>
+                  <line x1="30" y1="0" x2="30" y2="68" />
+                  <ellipse cx="30" cy="78" rx="7" ry="5" />
+                  <ellipse cx="30" cy="92" rx="11" ry="7" />
+                  <ellipse cx="30" cy="108" rx="15" ry="9" />
+                  <circle cx="30" cy="132" r="14" />
+                  <circle cx="30" cy="132" r="7" />
+                  <circle cx="30" cy="132" r="2.5" />
+                </g>
+              </symbol>
+
+              <symbol id="tn-crown" viewBox="0 0 200 230">
+                <g {...DOT}>
+                  <use href="#tn-spire" x="82" y="0" width="36" height="96" />
+                  <use href="#tn-spire" x="47" y="14" width="36" height="96" />
+                  <use href="#tn-spire" x="117" y="14" width="36" height="96" />
+                  <use href="#tn-spire" x="12" y="40" width="36" height="96" />
+                  <use href="#tn-spire" x="152" y="40" width="36" height="96" />
+                  <circle cx="100" cy="112" r="20" />
+                  <circle cx="100" cy="112" r="6" />
+                  <path d="M100,136 C66,110 30,128 34,160 C38,190 84,192 100,160" />
+                  <path d="M100,136 C134,110 170,128 166,160 C162,190 116,192 100,160" />
+                  <path d="M58,128 L142,200 M142,128 L58,200" />
+                  <Glyph x="66" y="154" />
+                  <Glyph x="134" y="154" />
+                  <Glyph x="100" y="176" />
+                </g>
+              </symbol>
+
+              <symbol id="tn-yantra" viewBox="0 0 200 260">
+                <g {...DOT}>
+                  <use href="#tn-spire" x="80" y="0" width="40" height="107" />
+                  <circle cx="100" cy="116" r="9" />
+                  <polygon points="100,110 152,200 48,200" />
+                  <polygon points="100,230 48,140 152,140" />
+                  <rect x="68" y="138" width="64" height="64" rx="5" />
+                  {[[44, 134], [156, 134], [44, 206], [156, 206]].map(([x, y]) => (
+                    <circle key={`${x}-${y}`} cx={x} cy={y} r="11" />
+                  ))}
+                  <circle cx="100" cy="170" r="12" />
+                  <circle cx="100" cy="170" r="5" />
+                  <circle cx="100" cy="244" r="9" />
+                </g>
+              </symbol>
+
+              <symbol id="tn-stair" viewBox="0 0 150 150">
+                <g {...DOT}>
+                  {STAIR.map(({ x, y }) => (
+                    <g key={`${x}-${y}`}>
+                      <rect x={x} y={y} width="26" height="26" rx="5" />
+                      <Glyph x={x + 13} y={y + 10} />
+                    </g>
+                  ))}
+                </g>
+              </symbol>
+
+              <symbol id="tn-bud" viewBox="0 0 100 280">
+                <g {...DOT}>
+                  <line x1="50" y1="0" x2="50" y2="30" />
+                  <ellipse cx="50" cy="40" rx="5" ry="4" />
+                  <ellipse cx="50" cy="52" rx="9" ry="6" />
+                  <g transform="translate(0 64)">
+                    <path d="M50,0 C30,34 22,62 22,88 C22,118 34,132 50,132 C66,132 78,118 78,88 C78,62 70,34 50,0 Z" />
+                    <path d="M50,26 C40,50 37,68 37,88 C37,108 43,118 50,118 C57,118 63,108 63,88 C63,68 60,50 50,26 Z" />
+                    <circle cx="50" cy="86" r="6" />
+                    <path d="M22,126 Q36,112 50,132 Q64,112 78,126 Q64,154 50,146 Q36,154 22,126 Z" />
+                    <path d="M50,148 C38,162 62,170 50,184 C42,194 52,200 50,208" />
+                  </g>
+                </g>
+              </symbol>
+
+              <symbol id="tn-tassel" viewBox="0 0 140 30">
+                <g {...DOT}>
+                  <circle cx="14" cy="15" r="11" />
+                  <circle cx="14" cy="15" r="5" />
+                  <circle cx="14" cy="15" r="2" />
+                  <path d="M27,15 q6,-9 12,0 t12,0 t12,0" />
+                  <path d="M66,15 L138,15" />
+                </g>
+              </symbol>
+            </defs>
+          </svg>
+
+          {orn('tn-crown', '0 0 200 230', 'right-2 top-20 h-36 w-32 sm:right-8 sm:h-52 sm:w-44')}
+          {orn('tn-yantra', '0 0 200 260', 'left-1/2 top-[40%] hidden h-56 w-40 -translate-x-1/2 md:block')}
+          {orn('tn-stair', '0 0 150 150', 'bottom-2 left-2 h-24 w-24 sm:h-36 sm:w-36')}
+          {orn('tn-bud', '0 0 100 280', 'bottom-16 left-20 h-32 w-12 sm:bottom-24 sm:left-32 sm:h-44 sm:w-16')}
+          {orn('tn-spire', '0 0 60 160', 'bottom-36 left-3 hidden h-32 w-12 sm:block')}
+          {orn('tn-tassel', '0 0 140 30', 'bottom-3 left-28 hidden h-6 w-28 sm:block')}
+          {orn('tn-tassel', '0 0 140 30', 'bottom-16 right-10 hidden h-7 w-32 -scale-x-100 md:block')}
+        </div>
+      );
+    }
+
+    function Stat({ label, value, tone = 'text-slate-900' }) {
+      return (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <span className="block text-[10px] uppercase text-slate-400">{label}</span>
+          <span className={`font-mono text-sm font-bold ${tone}`}>{value}</span>
+        </div>
+      );
+    }
+
+    function TrueNetCalculatorApp() {
+      const [tab, setTab] = useState('v1');
+      const [grossAmount, setGrossAmount] = useState(DEFAULTS.gross);
+      const [invoiceCurrency, setInvoiceCurrency] = useState(DEFAULTS.invoiceCurrency);
+      const [targetCurrency, setTargetCurrency] = useState(DEFAULTS.targetCurrency);
+      const [gatewayKey, setGatewayKey] = useState(DEFAULTS.gateway);
+      const [taxRate, setTaxRate] = useState(DEFAULTS.tax);
+      const [grossFocused, setGrossFocused] = useState(false);
+      const [isMounted, setIsMounted] = useState(false);
+
+      const [license, setLicense] = useState(null);
+      const isPro = Boolean(license);
+      const [licenseBusy, setLicenseBusy] = useState(false);
+      const [licenseMsg, setLicenseMsg] = useState('');
+      const [licenseMsgError, setLicenseMsgError] = useState(false);
+      const [legalDoc, setLegalDoc] = useState(null);
+
+      useEffect(() => {
+        const syncFromHash = () => setLegalDoc(legalKeyFromHash(window.location.hash));
+        syncFromHash();
+        window.addEventListener('hashchange', syncFromHash);
+        return () => window.removeEventListener('hashchange', syncFromHash);
+      }, []);
+      const openLegal = (key) => {
+        setLegalDoc(key);
+        try {
+          window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${key}`);
+        } catch {
+          // Address bar not writable
+        }
+      };
+      const closeLegal = () => {
+        setLegalDoc(null);
+        try {
+          window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+        } catch {
+          // Address bar not writable
+        }
+      };
+
+      useEffect(() => {
+        document.title = SITE_TITLE;
+      }, []);
+
+      useEffect(() => {
+        try {
+          const g = localStorage.getItem(STORAGE_KEYS.gross);
+          const ic = localStorage.getItem(STORAGE_KEYS.invoiceCurrency);
+          const tc = localStorage.getItem(STORAGE_KEYS.targetCurrency);
+          const gw = localStorage.getItem(STORAGE_KEYS.gateway);
+          const tx = localStorage.getItem(STORAGE_KEYS.tax);
+          if (g !== null) setGrossAmount(g === '' ? '' : String(toAmount(g)));
+          if (ic !== null) setInvoiceCurrency(toCurrency(ic, DEFAULTS.invoiceCurrency));
+          if (tc !== null) setTargetCurrency(toCurrency(tc, DEFAULTS.targetCurrency));
+          if (gw !== null) setGatewayKey(toGateway(gw));
+          if (tx !== null) setTaxRate(toTaxRate(tx));
+        } catch {
+          // Storage blocked
+        }
+        setIsMounted(true);
+
+        const stored = loadStoredLicense();
+        if (stored) {
+          setLicense(stored);
+          validateLicense(stored).then((status) => {
+            if (status === 'invalid') {
+              clearStoredLicense();
+              setLicense(null);
+              setLicenseMsg('Your license is no longer valid, so premium modules are locked again.');
+              setLicenseMsgError(true);
+            }
+          });
+        }
+
+        try {
+          const { key: urlKey, search: cleaned } = takeLicenseKeyFromUrl(window.location.search);
+          if (cleaned !== window.location.search) {
+            window.history.replaceState(null, '', `${window.location.pathname}${cleaned}${window.location.hash}`);
+          }
+          if (urlKey && !(stored && stored.key === urlKey)) {
+            setTab('v3');
+            handleActivate(urlKey);
+          }
+        } catch {
+          // Address bar not readable
+        }
+      }, []);
+
+      useEffect(() => {
+        if (!isMounted) return;
+        try {
+          localStorage.setItem(STORAGE_KEYS.gross, grossAmount);
+          localStorage.setItem(STORAGE_KEYS.invoiceCurrency, invoiceCurrency);
+          localStorage.setItem(STORAGE_KEYS.targetCurrency, targetCurrency);
+          localStorage.setItem(STORAGE_KEYS.gateway, gatewayKey);
+          localStorage.setItem(STORAGE_KEYS.tax, String(taxRate));
+        } catch {
+          // Storage quota
+        }
+      }, [grossAmount, invoiceCurrency, targetCurrency, gatewayKey, taxRate, isMounted]);
+
+      const calc = calculatePayout({ gross: grossAmount, gateway: gatewayKey, invoiceCurrency, targetCurrency, taxRate });
+      const { gw, isCross, fees, crossRate, converted, taxReserve, leakage, effectiveRate } = calc;
+      const parsedGross = calc.amount;
+      const safeTax = calc.tax;
+      const trueNet = calc.net;
+
+      const shownGross =
+        grossFocused || grossAmount === ''
+          ? grossAmount
+          : parsedGross.toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+      const goTo = (id) => {
+        setTab(id);
+        if (typeof window !== 'undefined') window.scrollTo({ top: 0 });
+      };
+      const handleActivate = async (rawKey) => {
+        setLicenseBusy(true);
+        setLicenseMsg('');
+        setLicenseMsgError(false);
+        const result = await activateLicense(rawKey);
+        if (result.ok) {
+          saveStoredLicense(result.license);
+          setLicense(result.license);
+          setLicenseMsg('License activated. Premium modules are unlocked.');
+        } else {
+          setLicenseMsg(result.message);
+          setLicenseMsgError(true);
+        }
+        setLicenseBusy(false);
+      };
+
+      const handleDeactivate = async () => {
+        if (!license) return;
+        setLicenseBusy(true);
+        setLicenseMsgError(false);
+        const freed = await deactivateLicense(license);
+        clearStoredLicense();
+        setLicense(null);
+        setLicenseMsg(
+          freed
+            ? 'License removed from this browser. You can activate it again on any device.'
+            : 'Removed from this browser, but we could not free the activation online. Try again later if you hit your device limit.'
+        );
+        setLicenseBusy(false);
+      };
+
+      const handleLoadProfile = (p) => {
+        setInvoiceCurrency(toCurrency(p.invoiceCurrency, DEFAULTS.invoiceCurrency));
+        setTargetCurrency(toCurrency(p.targetCurrency, DEFAULTS.targetCurrency));
+        setGatewayKey(toGateway(p.gateway));
+        setTaxRate(toTaxRate(p.tax));
+        goTo('v1');
+      };
+
+      const fixedParts = [
+        fees.fixed > 0 && `${money(fees.fixed, invoiceCurrency)} fixed fee`,
+        fees.intermediary > 0 && `${money(fees.intermediary, invoiceCurrency)} intermediary bank deductions (estimated)`,
+      ].filter(Boolean);
+      const breakdownSteps = [
+        ['Step 1: Base processing fee', `${money(parsedGross, invoiceCurrency)} × ${pct(gw.baseRate)}`, money(fees.base, invoiceCurrency)],
+        [
+          'Step 2: Cross-border surcharge',
+          isCross
+            ? gw.crossBorderRate > 0
+              ? `${money(parsedGross, invoiceCurrency)} × ${pct(gw.crossBorderRate)}`
+              : 'No cross-border percentage for this processor'
+            : 'Same currency, so no cross-border surcharge applies',
+          money(fees.crossBorder, invoiceCurrency),
+        ],
+        [
+          'Step 3: FX conversion and spread cost',
+          isCross
+            ? gw.fxRate > 0
+              ? `${money(parsedGross, invoiceCurrency)} × ${pct(gw.fxRate)}${gw.id === 'paypal' ? ' (typical hidden markup is 3.0% to 4.0%)' : ''}`
+              : 'Converted at the real mid-market rate, with no markup'
+            : 'Same currency, so nothing to convert',
+          money(fees.fx, invoiceCurrency),
+        ],
+        [
+          'Step 4: Fixed fees (added after the percentages)',
+          fixedParts.length ? fixedParts.join(' + ') : 'This processor has no fixed fee here',
+          money(fees.flatFees, invoiceCurrency),
+        ],
+        [
+          'Step 5: Total fees',
+          `${money(fees.percentageFees, invoiceCurrency)} percentage fees + ${money(fees.flatFees, invoiceCurrency)} fixed fees = ${effectiveRate.toFixed(2)}% of your invoice`,
+          money(fees.total, invoiceCurrency),
+        ],
+        [
+          'Step 6: Converted payout',
+          `${money(parsedGross, invoiceCurrency)} − ${money(fees.total, invoiceCurrency)} fees = ${money(fees.afterFees, invoiceCurrency)}, × ${crossRate}`,
+          money(converted, targetCurrency),
+        ],
+        ['Step 7: Tax safe-harbor reserve', `${money(converted, targetCurrency)} × ${safeTax}%`, money(taxReserve, targetCurrency)],
+        ['Step 8: True net spendable income', `${money(converted, targetCurrency)} − ${money(taxReserve, targetCurrency)}`, money(trueNet, targetCurrency)],
+      ];
+      const checkout = checkoutHref();
+      const showAffiliate = WISE_AFFILIATE_URL.startsWith('https://');
+
+      return (
+        <div className="relative min-h-screen overflow-x-hidden bg-[#fcfbf9] font-sans text-slate-900 antialiased selection:bg-amber-200">
+          <GeoBackground />
+
+          <div className="relative z-10 flex min-h-screen flex-col">
+            <header className="sticky top-0 z-50 border-b border-slate-200 bg-white/95 backdrop-blur-md">
+              <div className="mx-auto flex max-w-7xl flex-col gap-2 px-4 py-3 sm:px-6 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center justify-between gap-3">
+                  <button type="button" onClick={() => goTo('v1')} className="flex items-center gap-2.5 focus:outline-none focus:ring-2 focus:ring-slate-900 rounded-lg">
+                    <span aria-hidden="true" className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-sm font-black text-white">T</span>
+                    <span className="text-base font-bold leading-tight tracking-tight sm:text-xl">True Net Calculator</span>
+                  </button>
+                  <PassCta licensed={isPro} href={checkout} onOpen={() => goTo(license ? 'v3' : 'v4')} className="rounded-lg border border-slate-900 px-3.5 py-1.5 text-sm font-medium hover:bg-slate-50 md:hidden" />
+                </div>
+                <nav aria-label="Main" className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 text-sm font-medium">
+                  {TABS.map(([id, name]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => goTo(id)}
+                      aria-current={tab === id ? 'page' : undefined}
+                      className={`shrink-0 rounded-lg px-3 py-1.5 transition-colors ${tab === id ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </nav>
+                <PassCta licensed={isPro} href={checkout} onOpen={() => goTo(license ? 'v3' : 'v4')} className="hidden rounded-lg border border-slate-900 px-4 py-1.5 text-sm font-medium hover:bg-slate-50 md:block" />
+              </div>
+            </header>
+            <AdConsentBar hidden={!isMounted || isPro} />
+            <AdBanner slot="top" hidden={!isMounted || isPro} className="pt-4" />
+
+            {/* VIEW 1: HOME AND CALCULATOR */}
+            {tab === 'v1' && (
+              <main className="flex-1">
+                {!license && (
+                  <div className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-center text-xs font-medium text-amber-900 sm:text-sm">
+                    <strong>Lifetime access:</strong> unlock the premium modules with a one-time payment of {LICENSE_CONFIG.priceLabel}.
+                  </div>
+                )}
+
+                <section className="mx-auto max-w-4xl px-4 pb-8 pt-10 text-center sm:px-6">
+                  <h1 className="mb-4 text-3xl font-extrabold leading-tight tracking-tight sm:text-5xl">
+                    Stop Guessing Your True Cross-Border Net Income
+                  </h1>
+                  <p className="mx-auto mb-8 max-w-2xl text-sm leading-relaxed text-slate-600 sm:text-base">
+                    Instantly calculate payment processor fees, foreign exchange markup spreads, and tax safe-harbor reserves. Your invoice numbers are calculated in your browser and never sent to a server.
+                  </p>
+                  <div className="flex flex-col justify-center gap-3 min-[420px]:flex-row">
+                    <a href="#calculator" className={btnDark}>Use Free Tool Now</a>
+                    <button type="button" onClick={() => goTo('v4')} className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50">
+                      Claim Lifetime Pass
+                    </button>
+                  </div>
+                </section>
+
+                <div id="calculator" className="mx-auto mb-16 max-w-5xl scroll-mt-28 px-4 sm:px-6">
+                  {!isMounted ? (
+                    <div role="status" aria-live="polite" className={`${card} flex min-h-[420px] items-center justify-center p-6 text-sm text-slate-500`}>
+                      Loading your saved numbers...
+                    </div>
+                  ) : (
+                    <div className={`${card} p-5 shadow-xl sm:p-8`}>
+                      <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+                        {/* Left: configuration */}
+                        <div className="space-y-4">
+                          <h2 className="border-b border-slate-200 pb-2 text-base font-bold">Invoice Configuration</h2>
+                          <div>
+                            <label htmlFor="calcGross" className={lab}>Gross Invoice Balance</label>
+                            <div className="relative">
+                              <span aria-hidden="true" className="pointer-events-none absolute left-3 top-2.5 font-medium text-slate-400">
+                                {SYMBOLS[invoiceCurrency]}
+                              </span>
+                              <input
+                                id="calcGross"
+                                type="text"
+                                inputMode="decimal"
+                                autoComplete="off"
+                                value={shownGross}
+                                placeholder="0.00"
+                                onFocus={() => setGrossFocused(true)}
+                                onChange={(e) => setGrossAmount(cleanAmount(e.target.value))}
+                                onBlur={() => {
+                                  setGrossFocused(false);
+                                  if (grossAmount !== '') setGrossAmount(String(parsedGross));
+                                }}
+                                className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-7 pr-3 font-mono text-lg font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Quick invoice amounts">
+                            <span className="text-xs text-slate-500">Quick test:</span>
+                            {[1000, 5000, 10000].map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                onClick={() => setGrossAmount(String(v))}
+                                aria-pressed={parsedGross === v}
+                                className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-slate-900 ${parsedGross === v ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}
+                              >
+                                {SYMBOLS[invoiceCurrency]}{v.toLocaleString('en-US')}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2">
+                            <div className="min-w-0">
+                              <label htmlFor="calcClientCurr" className={lab}>Client Currency</label>
+                              <select id="calcClientCurr" value={invoiceCurrency} onChange={(e) => setInvoiceCurrency(toCurrency(e.target.value, DEFAULTS.invoiceCurrency))} className={ctl}>
+                                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </div>
+                            <div className="min-w-0">
+                              <label htmlFor="calcPayoutCurr" className={lab}>Payout Target</label>
+                              <select id="calcPayoutCurr" value={targetCurrency} onChange={(e) => setTargetCurrency(toCurrency(e.target.value, DEFAULTS.targetCurrency))} className={ctl}>
+                                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                          <div>
+                            <label htmlFor="calcGateway" className={lab}>Payment Processor Gateway</label>
+                            <select id="calcGateway" value={gatewayKey} onChange={(e) => setGatewayKey(toGateway(e.target.value))} className={ctl}>
+                              {GATEWAY_KEYS.map((k) => (
+                                <option key={k} value={k}>
+                                  {GATEWAYS[k].label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <div className="mb-1 flex justify-between text-xs font-semibold text-slate-600">
+                              <label htmlFor="calcTaxRange" className="uppercase">Estimated Tax Safe-Harbor Reserve</label>
+                              <span className="font-bold text-slate-900">{safeTax}%</span>
+                            </div>
+                            <input
+                              id="calcTaxRange"
+                              type="range"
+                              min="0"
+                              max={MAX_TAX}
+                              step="1"
+                              value={safeTax}
+                              aria-valuetext={`${safeTax} percent`}
+                              onChange={(e) => setTaxRate(toTaxRate(e.target.value))}
+                              className="w-full cursor-pointer accent-slate-900"
+                            />
+                            <div className="flex justify-between text-[11px] text-slate-500"><span>0%</span><span>25%</span><span>50%</span></div>
+                          </div>
+                        </div>
+
+                        {/* Right: final net ledger */}
+                        <div className="flex min-w-0 flex-col justify-between gap-4">
+                          <div>
+                            <h2 className="mb-4 border-b border-slate-200 pb-2 text-base font-bold">Final Net Ledger</h2>
+                            <div className="rounded-xl border-2 border-emerald-500/40 bg-emerald-50 p-5 text-center sm:p-6">
+                              <div className="mb-1 break-all font-mono text-3xl font-black tabular-nums sm:text-4xl">
+                                {money(trueNet, targetCurrency)}
+                              </div>
+                              <div className="text-xs font-bold uppercase tracking-wide text-emerald-800">Step E: True Net Spendable Income</div>
+                            </div>
+                            <p className="mt-3 text-xs leading-relaxed text-slate-500">
+                              Fees {money(fees.total, invoiceCurrency)} ({gw.name}{isCross ? ' incl. cross-border and FX costs' : ''}) · Tax set-aside {money(taxReserve, targetCurrency)} · 1 {invoiceCurrency} = {crossRate} {targetCurrency} (approximate)
+                            </p>
+                          </div>
+                          {leakage > 0 ? (
+                            <div className="space-y-1 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
+                              <div className="flex items-center gap-1 font-bold text-amber-950"><span aria-hidden="true">⚠️</span> Financial Leakage Detected</div>
+                              <p>
+                                Processor margins and conversion spreads cost you about <strong className="break-all">{money(leakage, targetCurrency)}</strong> more than Wise Business would on this invoice.
+                              </p>
+                              <button type="button" onClick={() => goTo('v2')} className="block pt-1 font-bold underline text-amber-950">
+                                Review Optimization Strategies →
+                              </button>
+                              {showAffiliate && (
+                                <span className="block pt-1">
+                                  <a href={WISE_AFFILIATE_URL} target="_blank" rel="noopener noreferrer sponsored nofollow" className="font-bold underline text-amber-950">
+                                    See what Wise Business would charge →
+                                  </a>
+                                  <span className="block text-[11px] text-amber-800">Affiliate link: we may earn a commission at no extra cost to you.</span>
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-900">
+                              <strong>No extra leakage detected.</strong> This setup is at or below the lowest-cost route we model.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {isMounted && (
+                    <section aria-labelledby="math-h" className={`${card} mt-6 p-5 sm:p-8`}>
+                      <h2 id="math-h" className="border-b border-slate-200 pb-2 text-base font-bold">How we got this number</h2>
+                      <ol className="divide-y divide-slate-100 text-sm">
+                        {breakdownSteps.map(([title, formula, value], i) => (
+                          <li key={title} className={`flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between ${i === breakdownSteps.length - 1 ? 'font-semibold' : ''}`}>
+                            <div className="min-w-0">
+                              <p className={i === breakdownSteps.length - 1 ? 'text-emerald-800' : 'text-slate-900'}>{title}</p>
+                              <p className="break-words font-mono text-xs text-slate-500">{formula}</p>
+                            </div>
+                            <p className="font-mono tabular-nums sm:text-right break-all">{value}</p>
+                          </li>
+                        ))}
+                      </ol>
+                      {fees.capped && <p className="mt-2 text-xs text-slate-500">Fees are capped at the invoice amount.</p>}
+                      <p className="mt-3 text-xs leading-relaxed text-slate-500">
+                        Estimates only. Stripe is modelled at 1.5% cross-border plus 1.0% conversion, PayPal at 1.5% plus a 3.5% FX markup (typical range 3.0% to 4.0%), Wise at 0.45% with no markup, and SWIFT with an estimated $20 of intermediary deductions plus a 2.5% bank spread. Flat fees quoted in dollars are converted into your invoice currency. Real fees vary by account, country, card type and amount. Every step is rounded to the cent before the next one uses it, and the figures shown here are the exact figures used.
+                      </p>
+                    </section>
+                  )}
+                </div>
+                <AdBanner slot="infeed" hidden={!isMounted || isPro} className="mb-12" />
+              </main>
+            )}
+
+            {/* VIEW 2: CORRIDOR ANALYTICS */}
+            {tab === 'v2' && (
+              <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6">
+                <div className="mb-6 border-b border-slate-200 pb-4">
+                  <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Corridor Analytics Matrix</span>
+                  <h1 className="text-2xl font-extrabold sm:text-3xl">USD to EUR Route Optimization</h1>
+                </div>
+                <div className={`${card} mb-8 overflow-hidden shadow-xl`}>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-left text-sm">
+                      <caption className="sr-only">Fees and net received for a $10,000 USD to EUR invoice by network</caption>
+                      <thead className="border-b border-slate-200 bg-slate-50 text-xs font-bold uppercase text-slate-500">
+                        <tr>
+                          {['Network', 'Base fee', 'Cross-border', 'FX spread', 'Total fee ($10k invoice)', 'Net received'].map((h) => (
+                            <th key={h} scope="col" className="p-4">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                        {CORRIDOR.map((r) => {
+                          const best = r.gw.id === 'wise';
+                          return (
+                            <tr key={r.gw.id} className={best ? 'bg-emerald-50' : ''}>
+                              <th scope="row" className={`p-4 font-bold ${best ? 'text-emerald-950' : ''}`}>{r.gw.name}</th>
+                              <td className="p-4">{baseLabel(r.gw)}</td>
+                              <td className="p-4">{crossLabel(r.gw)}</td>
+                              <td className="p-4">{fxLabel(r.gw)}</td>
+                              <td className={`p-4 font-mono ${best ? 'font-bold text-emerald-700' : 'text-red-600'}`}>{money(r.total, 'USD')}</td>
+                              <td className={`p-4 font-mono font-bold ${best ? 'text-emerald-800' : ''}`}>{money(r.afterFees, 'USD')}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="flex flex-col items-start justify-between gap-4 rounded-xl border border-amber-200 bg-amber-50 p-5 md:flex-row md:items-center">
+                  <div>
+                    <h2 className="text-sm font-bold text-amber-950">Institutional FX Leakage Warning</h2>
+                    <p className="text-xs text-amber-800">You could be losing up to {money(WORST_CORRIDOR_LEAK, 'USD')} per $10,000 transaction using legacy gateways.</p>
+                  </div>
+                  {showAffiliate && (
+                    <div className="flex flex-col gap-1">
+                      <a href={WISE_AFFILIATE_URL} target="_blank" rel="noopener noreferrer sponsored nofollow" className="whitespace-nowrap rounded-lg bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white shadow hover:bg-emerald-800">
+                        See Wise Business pricing →
+                      </a>
+                      <span className="text-[11px] text-amber-800">Affiliate link: we may earn a commission at no extra cost to you.</span>
+                    </div>
+                  )}
+                </div>
+                <p className="mt-4 text-xs text-slate-500">Fee layers are modelled estimates, with PayPal's FX markup at the midpoint of its typical range and SWIFT intermediary deductions estimated. Check each provider's current pricing before you switch.</p>
+              </main>
+            )}
+
+            {/* VIEW 3: PREMIUM MODULES (license-gated) */}
+            {tab === 'v3' && (
+              <PremiumModules
+                licensed={isPro}
+                snapshot={{ gross: parsedGross, invoiceCurrency, targetCurrency, gateway: toGateway(gatewayKey), tax: safeTax, net: trueNet }}
+                onLoadProfile={handleLoadProfile}
+                busy={licenseBusy}
+                message={licenseMsg}
+                messageIsError={licenseMsgError}
+                onActivate={handleActivate}
+              />
+            )}
+
+            {/* VIEW 4: PURCHASE AND LICENSE ACTIVATION */}
+            {tab === 'v4' && (
+              <ActivationView
+                license={license}
+                busy={licenseBusy}
+                message={licenseMsg}
+                messageIsError={licenseMsgError}
+                onActivate={handleActivate}
+                onDeactivate={handleDeactivate}
+                onOpenPremium={() => goTo('v3')}
+              />
+            )}
+
+            {/* VIEW 5: UNIFIED WORKSPACE */}
+            {tab === 'v5' && (
+              <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-10 sm:px-6">
+                <div className="mb-6 border-b border-slate-200 pb-4">
+                  <h1 className="text-2xl font-extrabold sm:text-3xl">Unified Master Workspace</h1>
+                  <p className="text-xs text-slate-500">Live engine metrics, corridor analysis, and local session details in one place.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+                  <section className={`${card} space-y-4 p-5 lg:col-span-2`}>
+                    <h2 className="border-b border-slate-200 pb-2 text-sm font-bold">Active Corridor Matrix</h2>
+                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                      <Stat label="ROUTE" value={`${invoiceCurrency} → ${targetCurrency}`} />
+                      <Stat label="WISE FEE" value={pct(GATEWAYS.wise.baseRate)} tone="text-emerald-600" />
+                      <Stat label="STRIPE INT'L" value={pct(GATEWAYS.stripe.baseRate + GATEWAYS.stripe.crossBorderRate + GATEWAYS.stripe.fxRate)} tone="text-red-600" />
+                      <Stat label="TAX ALLOCATION" value={`${safeTax.toFixed(2)}%`} />
+                    </div>
+                  </section>
+                  <section className={`${card} space-y-3 p-5`}>
+                    <h2 className="border-b border-slate-200 pb-2 text-sm font-bold">Session Details</h2>
+                    <dl className="space-y-2 text-xs">
+                      <div className="flex justify-between text-slate-600"><dt>Plan:</dt><dd className={`font-bold ${license ? 'text-emerald-700' : 'text-slate-900'}`}>{license ? 'Lifetime Pass' : 'Free'}</dd></div>
+                      <div className="flex justify-between text-slate-600"><dt>License key:</dt><dd className="font-mono font-bold text-slate-900">{license ? `••••${license.key.slice(-4)}` : 'None'}</dd></div>
+                      <div className="flex justify-between text-slate-600"><dt>Memory sync:</dt><dd className="font-bold text-emerald-700">Local browser only</dd></div>
+                    </dl>
+                  </section>
+                </div>
+              </main>
+            )}
+
+            <AdBanner slot="footer" hidden={!isMounted || isPro} className="pb-6" />
+            <footer className="border-t border-slate-200 bg-white/95">
+              <div className="mx-auto max-w-7xl px-4 py-6 text-xs leading-relaxed text-slate-500 sm:px-6">
+                <nav aria-label="Legal and contact" className="mb-3 flex flex-wrap gap-x-5 gap-y-2 text-sm font-medium text-slate-700">
+                  {[['privacy', 'Privacy Policy'], ['terms', 'Terms & Disclaimer'], ['contact', 'About & Contact']].map(([key, label]) => (
+                    <a
+                      key={key}
+                      href={`#${key}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        openLegal(key);
+                      }}
+                      className="underline underline-offset-2 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+                    >
+                      {label}
+                    </a>
+                  ))}
+                </nav>
+                <p className="max-w-3xl">
+                  True Net Calculator gives estimates only. It is not financial, tax, legal or accounting advice. Rates are approximate and real fees vary. Your inputs are processed in your browser and saved only in this browser's localStorage. {ADS_CONFIGURED && !isPro ? 'Ads on the free plan appear only if you allow them and may use cookies.' : 'This site sets no cookies of its own.'}
+                </p>
+                <p className="mt-2">© True Net Calculator. Checkout and license keys by Lemon Squeezy.</p>
+              </div>
+            </footer>
+            {legalDoc && <LegalModal docKey={legalDoc} onClose={closeLegal} />}
+          </div>
+        </div>
+      );
+    }
+
+    // Mount the application to the root container
+    const rootElement = document.getElementById('root');
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(<TrueNetCalculatorApp />);
+  </script>
+</body>
 </html>
