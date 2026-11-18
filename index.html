@@ -30,9 +30,9 @@
     const { useState, useEffect, useRef } = React;
 
     // ============================================================================
-    // CONFIGURATION: paste your Lemon Squeezy details here
+    // CONFIGURATION: checkout & product details
     // ============================================================================
-    const LEMONSQUEEZY_CHECKOUT_URL = "https://your-store.lemonsqueezy.com/buy/your-product-id";
+    const CHECKOUT_URL = "https://buy.polar.sh/polar_cl_HxAWxP8gg7um1nME6OeblxiEQoF1j3ZDLSTi20NOcdQ";
     const LEMONSQUEEZY_STORE_ID = "";
     const LEMONSQUEEZY_PRODUCT_ID = "";
     const LIFETIME_PASS_PRICE = "$49";
@@ -194,7 +194,7 @@
     };
 
     // ============================================================================
-    // LEMON SQUEEZY LICENSE CLIENT
+    // LICENSE CLIENT
     // ============================================================================
     const LICENSE_CONFIG = {
       priceLabel: LIFETIME_PASS_PRICE,
@@ -210,9 +210,8 @@
 
     const checkoutHref = () => {
       try {
-        const url = new URL(LEMONSQUEEZY_CHECKOUT_URL);
-        const isPlaceholder = /your-store|your-product-id/i.test(url.href);
-        return url.protocol === 'https:' && url.hostname.endsWith('.lemonsqueezy.com') && !isPlaceholder ? url.href : '';
+        const url = new URL(CHECKOUT_URL);
+        return url.protocol === 'https:' ? url.href : '';
       } catch {
         return '';
       }
@@ -579,8 +578,8 @@
             )}
             <p className="mt-2 text-xs text-slate-500">
               {href
-                ? 'Secure checkout by Lemon Squeezy. VAT or sales tax is added at checkout where it applies.'
-                : 'Checkout is not connected yet. Paste your link into LEMONSQUEEZY_CHECKOUT_URL at the top of page.js.'}
+                ? 'Secure checkout. VAT or sales tax is added at checkout where it applies.'
+                : 'Checkout is not connected yet.'}
             </p>
             <p className="mt-1 text-xs text-slate-500">
               By purchasing you agree to the <a href="#terms" className="underline underline-offset-2">Terms &amp; Disclaimer</a> and <a href="#privacy" className="underline underline-offset-2">Privacy Policy</a>.
@@ -1038,7 +1037,7 @@
             "True Net Calculator estimates what you keep from an international invoice. The numbers you type are processed locally in your browser and saved in your browser's localStorage. There are no accounts, and your invoice figures are not sent to our servers.",
             { list: [
               "Calculations run on your device.",
-              "Lemon Squeezy handles secure checkout and license key validation.",
+              "Secure checkout and license key validation.",
               "On the free plan, Google ads load only if you click Allow ads.",
               "We do not sell your personal information.",
             ] },
@@ -1048,10 +1047,9 @@
             { list: LOCAL_KEY_NOTES },
             "Clearing this site's data in your browser deletes these items, and we cannot recover them.",
           ]],
-          ["Purchases and license keys (Lemon Squeezy)", [
-            "Lemon Squeezy is our merchant of record. It handles checkout, payment, taxes and receipts. We never see your card details. In our Lemon Squeezy account we can see order details such as your email address, which we use to help you with support.",
-            "When you activate a license key, your browser sends the key and a device label (TrueNetWeb) to Lemon Squeezy's license service to confirm that it is valid. The key and a device ID are then saved in your localStorage, and the key is checked again on later visits. Lemon Squeezy's own privacy policy covers its processing.",
-            { links: [["Lemon Squeezy Privacy Policy", "https://www.lemonsqueezy.com/privacy"]] },
+          ["Purchases and license keys", [
+            "Checkout handles payment, taxes and receipts securely. We never see your card details.",
+            "When you activate a license key, your browser confirms that it is valid. The key and a device ID are then saved in your localStorage, and the key is checked again on later visits.",
           ]],
           ["Advertising (Google AdSense) and affiliate links", [
             "The free plan may show ads from Google AdSense. The ad script loads only after you click Allow ads in the ad notice. Google and its partners may then use cookies or similar identifiers to show and measure ads, including personalized ads. Your choice is saved in localStorage. If you click No thanks, no ad script loads. The Lifetime Pass removes ads.",
@@ -1062,16 +1060,16 @@
             "Some links, such as those to Wise, are affiliate links and are marked as sponsored. If you click one, the provider or its affiliate network may set cookies and tell us that a click or sign-up happened, and we may earn a commission at no extra cost to you.",
           ]],
           ["Server logs and cookies", [
-            "Our hosting provider processes technical data such as your IP address, browser type and request times to deliver and secure the site. We run no analytics and no tracking pixels, and this site sets no cookies of its own. Third parties named above, such as Lemon Squeezy at checkout, Google if you allow ads, or Wise if you click an affiliate link, may set their own cookies.",
+            "Our hosting provider processes technical data such as your IP address, browser type and request times to deliver and secure the site. We run no analytics and no tracking pixels, and this site sets no cookies of its own. Third parties named above, such as checkout providers, Google if you allow ads, or Wise if you click an affiliate link, may set their own cookies.",
           ]],
           ["Legal bases (EEA and UK)", [
             "Where data protection law such as the GDPR applies, we rely on: performance of a contract (verifying your license), legitimate interests (delivering and securing the site), and consent (advertising cookies).",
           ]],
           ["Sharing and international transfers", [
-            "We do not sell personal information. Data is processed by Lemon Squeezy, by Google if you allow ads, and by our hosting provider. These providers may process data outside your country under the safeguards they describe in their own policies.",
+            "We do not sell personal information. Data is processed by payment processors, by Google if you allow ads, and by our hosting provider. These providers may process data outside your country under the safeguards they describe in their own policies.",
           ]],
           ["Retention", [
-            "Data in your localStorage stays until you clear it. Purchase records are kept by Lemon Squeezy and by us for as long as needed for support, accounting and tax. Server logs are kept by the hosting provider under its own schedule.",
+            "Data in your localStorage stays until you clear it. Purchase records are kept for as long as needed for support, accounting and tax. Server logs are kept by the hosting provider under its own schedule.",
           ]],
           ["Your rights", [
             "Depending on where you live, you may have the right to access, correct, delete, restrict or object to the processing of your personal data, to withdraw consent, to data portability, and to complain to your data protection authority. California residents have the right to know, delete and opt out of the sale or sharing of personal information. To use these rights for purchase records, email us from your purchase address. To stop ads, click No thanks or use Google Ads Settings. For everything stored in localStorage, you can delete it yourself in your browser.",
@@ -1115,10 +1113,10 @@
             "The calculator is free. The Lifetime Pass is a one-time payment that unlocks the Premium modules: saved client profiles, the invoice ledger and CSV report, the provider savings and annual projection tool, and the FX trend visualizer. “Lifetime” means for as long as True Net Calculator is offered, not for your lifetime. We may improve, change or retire features, and we will try to give notice of major changes.",
           ]],
           ["License keys", [
-            "A license key is for the person or business that bought it. Each key can be activated on a limited number of devices. Do not share or resell keys. We may deactivate keys that are refunded, charged back or abused. The site re-checks your key with Lemon Squeezy when you visit.",
+            "A license key is for the person or business that bought it. Each key can be activated on a limited number of devices. Do not share or resell keys. We may deactivate keys that are refunded, charged back or abused.",
           ]],
           ["Payments, taxes and refunds", [
-            "Lemon Squeezy is the merchant of record and handles secure checkout, payment, receipts and applicable VAT or sales tax. Its terms apply to the transaction.",
+            "Secure checkout handles payment, receipts and applicable VAT or sales tax.",
             `Refund policy: if you are not satisfied, email us within ${REFUND_DAYS} days of purchase with your purchase email or order number and we will refund the Lifetime Pass. A refunded key is deactivated. Any statutory consumer rights you have are not affected.`,
             { email: true },
           ]],
@@ -1697,9 +1695,14 @@
                   </p>
                   <div className="flex flex-col justify-center gap-3 min-[420px]:flex-row">
                     <a href="#calculator" className={btnDark}>Use Free Tool Now</a>
-                    <button type="button" onClick={() => goTo('v4')} className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50">
+                    <a
+                      href="https://buy.polar.sh/polar_cl_HxAWxP8gg7um1nME6OeblxiEQoF1j3ZDLSTi20NOcdQ"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 inline-flex items-center justify-center"
+                    >
                       Claim Lifetime Pass
-                    </button>
+                    </a>
                   </div>
                 </section>
 
@@ -1992,7 +1995,7 @@
                 <p className="max-w-3xl">
                   True Net Calculator gives estimates only. It is not financial, tax, legal or accounting advice. Rates are approximate and real fees vary. Your inputs are processed in your browser and saved only in this browser's localStorage. {ADS_CONFIGURED && !isPro ? 'Ads on the free plan appear only if you allow them and may use cookies.' : 'This site sets no cookies of its own.'}
                 </p>
-                <p className="mt-2">© True Net Calculator. Checkout and license keys by Lemon Squeezy.</p>
+                <p className="mt-2">© True Net Calculator.</p>
               </div>
             </footer>
             {legalDoc && <LegalModal docKey={legalDoc} onClose={closeLegal} />}
